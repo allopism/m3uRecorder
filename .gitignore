@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Datos de ejecución (grabaciones, historial, programaciones)
+output/
+
+# Lista de canales personal: se monta en el contenedor, no se versiona
+lista.m3u
+*.m3u
+*.m3u8
+
+# Caché de servidores que regenera Gluetun (~390k líneas)
+vpn/servers/
+
+# Secretos
+.env
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

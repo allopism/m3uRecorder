@@ -1,0 +1,10 @@
+[[roles]]
+name = "m3u-recorder-local"
+routes = [
+  "GET /v1/publicip/ip",
+  "GET /v1/vpn/status",
+  "PUT /v1/vpn/status",
+  "GET /v1/vpn/settings",
+  "PUT /v1/vpn/settings"
+]
+auth = "none"
