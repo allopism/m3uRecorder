@@ -1,10 +1,15 @@
 .git
 .gitignore
-__pycache__
-*.pyc
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.github
 output
 .env
 *.md
 # La lista se monta como volumen; no debe quedar dentro de la imagen
 *.m3u
 *.m3u8
+.venv
+tests

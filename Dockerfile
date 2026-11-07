@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Solo el código: la lista de canales y los datos de la VPN se montan como volúmenes
 COPY app.py .
+COPY m3urecorder/ m3urecorder/
 
 USER app
 EXPOSE 5000

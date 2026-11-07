@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acceso · M3U8 Stream Recorder</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b1120;
+         font-family: Inter, system-ui, sans-serif; color:#e2e8f0; padding:16px; box-sizing:border-box; }
+  form { width:100%; max-width:360px; background:#111a2e; border:1px solid #1e2a44; border-radius:16px;
+         padding:28px; box-shadow:0 20px 50px rgba(0,0,0,.4); }
+  h1 { font-size:18px; margin:0 0 6px; } p { margin:0 0 20px; color:#94a3b8; font-size:13.5px; }
+  input { width:100%; box-sizing:border-box; padding:11px 13px; border-radius:10px; border:1px solid #2a3a5c;
+          background:#0b1120; color:#f8fafc; font-size:15px; }
+  input:focus { outline:2px solid #6366f1; border-color:transparent; }
+  button { margin-top:14px; width:100%; padding:11px; border:0; border-radius:10px; background:#6366f1;
+           color:#fff; font-weight:600; font-size:15px; cursor:pointer; }
+  button:hover { background:#4f46e5; }
+  .error { margin-top:12px; color:#fda4af; font-size:13px; }
+</style></head>
+<body>
+  <form method="post" action="{{ url_for('auth.login') }}">
+    <h1>🎬 M3U8 Stream Recorder</h1>
+    <p>Introduce el token de acceso (variable <code>APP_TOKEN</code>).</p>
+    <input type="password" name="token" placeholder="Token de acceso" autocomplete="current-password" autofocus required>
+    <button type="submit">Entrar</button>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  </form>
+</body></html>

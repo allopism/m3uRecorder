@@ -63,22 +63,24 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 5. [x] **API de control de Gluetun con clave** (`GLUETUN_API_KEY`). Se elimina
        `vpn/auth/config.toml`, que tenía prioridad y la dejaba abierta.
 
-## Fase 3 — Estructura del código (lo que más luce en el portfolio)
+## Fase 3 — Estructura del código ✅
 
-1. [ ] Sacar el HTML/CSS/JS a `templates/` y `static/` (≈2.750 líneas fuera de `app.py`).
-2. [ ] Dividir el backend en módulos: `recorder`, `scheduler`, `vpn`, `storage`, `api`
-       (actualizar el `COPY` del Dockerfile y el volumen de `app.py` de tu servidor).
-3. [ ] Unificar grabación inmediata y programada (una inmediata = programada que
-       empieza ya) → eliminar ~200 líneas duplicadas. De paso, liberar el grabador
-       antes de la conversión final: hoy la siguiente programada espera a que
-       termine (segundos en grabaciones cortas, más en las de varias horas).
-4. [ ] Eliminar el cálculo manual de cambio de hora (ya lo resuelve `zoneinfo` + `tzdata`).
-5. [ ] Tests con pytest: tiempos y DST, solapes, evaluación de grabaciones, rutas.
-6. [ ] CI con GitHub Actions (tests + lint + build de la imagen).
+1. [x] HTML, CSS y JS separados en `templates/` y `static/` (plantillas Jinja con
+       escapado automático). El HTML generado es idéntico al original.
+2. [x] Backend dividido en el paquete `m3urecorder/` (`settings`, `timeutils`, `storage`,
+       `notify`, `vpn`, `channels`, `media`, `recorder`, `scheduler`, `auth`, `routes`)
+       con `create_app()`: sin estado global ni efectos al importar.
+3. [x] Grabación inmediata y programada unificadas en un solo flujo. El hueco de
+       captura se libera antes de la conversión final, así que la siguiente
+       programada arranca en el mismo segundo.
+4. [x] Cambio de hora resuelto con `zoneinfo` (sirve para cualquier zona horaria).
+5. [x] 61 tests con pytest, incluidas grabaciones reales con ffmpeg.
+6. [x] CI con GitHub Actions: ruff, pytest y construcción de la imagen con healthcheck.
 
 ## Fase 4 — Presentación
 
 - [ ] README con capturas/GIF, diagrama de arquitectura y guía de despliegue.
+- [ ] Quitar "ProtonVPN" fijo del subtítulo de la interfaz (ahora el proveedor es configurable).
 - [ ] Licencia (MIT) y aviso de uso: solo streams públicos o con derechos.
 - [ ] Imagen publicada en GitHub Container Registry.
 

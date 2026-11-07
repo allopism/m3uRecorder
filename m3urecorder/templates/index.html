@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>M3U8 Stream Recorder · DVR + VPN</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#090d16">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=version) }}">
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- Top Header -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🎬</div>
+      <div class="brand-text">
+        <h1>M3U8 Stream Recorder</h1>
+        <p>Grabación directa (-c copy) · ProtonVPN &amp; resistente a cambios de hora</p>
+      </div>
+    </div>
+    <div class="topbar-pills">
+      <!-- Selector y Estado VPN en vivo -->
+      <div class="pill pill-vpn" id="vpnPill" title="Estado de Gluetun VPN">
+        <span class="dot" id="vpnDot"></span>
+        <span id="vpnStatusText">🛡️ VPN</span>
+        <select id="topbarVpnSelect" class="vpn-quick-select" onchange="changeGlobalVpnCountry(this.value)" title="Cambiar país activo de la VPN">
+          <option value="">🌍 País...</option>
+        </select>
+      </div>
+
+      {% if auth_enabled %}<a class="pill" href="{{ url_for('auth.logout') }}" title="Cerrar sesión" style="text-decoration:none">🔒 Salir</a>{% endif %}
+      <div class="pill pill-clock" title="Hora local actual y zona horaria activa">
+        <span>🕐</span>
+        <span id="serverClock">--:--:--</span>
+      </div>
+      <div class="pill" id="globalStatePill">
+        <span class="dot" id="globalDot"></span>
+        <span id="globalStateText">Listo</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Live Recording Status Banner -->
+  <div id="statusBanner" class="live-banner">
+    <div class="live-banner-top">
+      <div class="live-status-main">
+        <span id="statusIcon">🟢</span>
+        <span id="statusText">{{ ready_status }}</span>
+      </div>
+      <div class="live-metrics">
+        <span id="liveTimer" style="display:none;">00:00:00 / 00:00:00</span>
+        <button id="globalStopBtn" class="btn-danger btn-sm" style="display:none;" onclick="stopRecord()">⏹️ Detener grabación</button>
+      </div>
+    </div>
+    <div class="progress-track" id="progressContainer" style="display:none;">
+      <div class="progress-fill" id="progressBar"></div>
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <div class="nav-tabs">
+    <button id="tabRecord" class="nav-tab active" onclick="showTab('record')">
+      <span class="tab-icon">📹</span>
+      <span class="tab-label-full">Grabador Directo</span>
+      <span class="tab-label-short">Directo</span>
+    </button>
+    <button id="tabSchedule" class="nav-tab" onclick="showTab('schedule')">
+      <span class="tab-icon">📅</span>
+      <span class="tab-label-full">Programar</span>
+      <span class="tab-label-short">Programar</span>
+      <span class="tab-count" id="badgeSchedulesCount">0</span>
+    </button>
+    <button id="tabChannels" class="nav-tab" onclick="showTab('channels')">
+      <span class="tab-icon">📺</span>
+      <span class="tab-label-full">Canales M3U</span>
+      <span class="tab-label-short">Canales</span>
+      <span class="tab-count" id="badgeChannelsCount">{{ channels_count }}</span>
+    </button>
+    <button id="tabHistory" class="nav-tab" onclick="showTab('history')">
+      <span class="tab-icon">📜</span>
+      <span class="tab-label-full">Historial</span>
+      <span class="tab-label-short">Historial</span>
+      <span class="tab-count" id="badgeHistoryCount">0</span>
+    </button>
+  </div>
+
+  <div class="content">
+
+    <!-- TAB 1: GRABADOR DIRECTO -->
+    <div id="recordView">
+      <div class="panel-card">
+        <div class="card-header">
+          <div class="card-title">⚡ Nueva grabación al vuelo</div>
+          <span style="font-size:12px;color:var(--text-secondary)">Calidad original intacta · Reconexión automática activa</span>
+        </div>
+
+        <form id="form">
+          <div class="form-group">
+            <label><span>🔗 Enlace del Stream (M3U8 / TS / HTTP)</span></label>
+            <input type="url" id="url" placeholder="https://ejemplo.com/live/canal.m3u8" required>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>
+                <span>⏱️ Duración (HH:MM:SS)</span>
+                <span style="font-weight:400;font-size:11.5px;color:var(--text-secondary)">Elige o escribe</span>
+              </label>
+              <input type="text" id="duration" class="mono-input" value="01:00:00" pattern="\d{2,}:\d{2}:\d{2}" required>
+              <div class="preset-chips">
+                <button type="button" class="chip" onclick="setDirectDuration('00:15:00')">15m</button>
+                <button type="button" class="chip" onclick="setDirectDuration('00:30:00')">30m</button>
+                <button type="button" class="chip" onclick="setDirectDuration('01:00:00')">1h</button>
+                <button type="button" class="chip" onclick="setDirectDuration('01:30:00')">1h 30m</button>
+                <button type="button" class="chip" onclick="setDirectDuration('02:00:00')">2h</button>
+                <button type="button" class="chip" onclick="setDirectDuration('03:00:00')">3h</button>
+                <button type="button" class="chip" onclick="setDirectDuration('04:00:00')">4h</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>
+                <span>🌍 País VPN para esta grabación</span>
+                <span style="font-weight:400;font-size:11.5px;color:#6ee7b7">Vuelve al país previo al acabar</span>
+              </label>
+              <select id="rVpnCountry">
+                <option value="">🛡️ Usar país actual de la VPN (Sin cambiar)</option>
+              </select>
+              <div class="preset-chips">
+                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Spain'">🇪🇸 España</button>
+                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Japan'">🇯🇵 Japón</button>
+                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Switzerland'">🇨🇭 Suiza</button>
+                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Netherlands'">🇳🇱 Países Bajos</button>
+                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value=''">🛡️ Actual</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>
+                <span>📝 Nombre del archivo (sin extensión)</span>
+                <span style="cursor:pointer;color:#60a5fa;font-size:12px;" onclick="refreshDefaultFilename()">🔄 Actualizar hora</span>
+              </label>
+              <input type="text" id="filename" value="grabacion_{{ now_ts }}" required>
+            </div>
+
+            <div class="form-group">
+              <label><span>📦 Contenedor de salida</span></label>
+              <select id="format">
+                <option value="mp4">MP4 (.mp4) — Estándar universal</option>
+                <option value="mkv">MKV (.mkv) — Soporta subtítulos DVB y multipista</option>
+                <option value="ts">MPEG-TS (.ts) — Volcado puro de transporte</option>
+                <option value="avi">AVI (.avi)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-primary" style="flex:2;">▶️ Iniciar Grabación Ahora</button>
+            <button type="button" class="btn-secondary" style="flex:1;" onclick="stopRecord()">⏹️ Detener</button>
+          </div>
+        </form>
+
+        <a id="download" class="download-banner" style="display:none;"></a>
+      </div>
+
+      <div class="panel-card" style="margin-bottom:0;">
+        <div class="card-header" style="margin-bottom:12px;padding-bottom:10px;">
+          <div class="card-title" style="font-size:14px;">🖥️ Consola de eventos</div>
+          <button type="button" class="btn-secondary btn-sm" onclick="document.getElementById('log').innerHTML=''">🧹 Limpiar</button>
+        </div>
+        <div id="log" class="log-box"></div>
+      </div>
+    </div>
+
+    <!-- TAB 2: PROGRAMAR GRABACIÓN -->
+    <div id="scheduleView" style="display:none;">
+      <div class="panel-card">
+        <div class="card-header">
+          <div class="card-title">📅 Programar nueva grabación</div>
+          <span style="font-size:12px;color:#93c5fd;">🌙 Compatible con cambios de horario Verano ↔ Invierno &amp; Cambio de país VPN</span>
+        </div>
+
+        <form id="scheduleForm">
+          <div class="form-group">
+            <label><span>🔗 Enlace del Stream (M3U8 / TS / HTTP)</span></label>
+            <input type="url" id="sUrl" placeholder="https://ejemplo.com/live/canal.m3u8" required>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>
+                <span>🕐 Fecha y hora de Inicio</span>
+                <span id="sStartTzBadge" class="badge-tz"></span>
+              </label>
+              <input type="datetime-local" id="sStart" required onchange="onScheduleDatesChanged()" oninput="onScheduleDatesChanged()">
+              <div class="preset-chips">
+                <button type="button" class="chip" onclick="setScheduleStartOffset(2)">En 2 min</button>
+                <button type="button" class="chip" onclick="setScheduleStartOffset(15)">En 15 min</button>
+                <button type="button" class="chip" onclick="setScheduleStartOffset(60)">En 1h</button>
+              </div>
+              <div id="sStartAmbiguousBox" class="dst-fold-box" style="display:none;">
+                <div>⚠️ <strong>Cambio de hora:</strong> Esta hora ocurre dos veces esta noche. ¿Cuál quieres usar?</div>
+                <div class="dst-fold-options">
+                  <button type="button" id="sStartFold0" class="fold-btn active" onclick="setFold('start', 0)">☀️ 1ª vez · Horario verano (UTC+2)</button>
+                  <button type="button" id="sStartFold1" class="fold-btn" onclick="setFold('start', 1)">❄️ 2ª vez · Horario invierno (UTC+1)</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>
+                <span>🕑 Fecha y hora de Fin</span>
+                <span id="sEndTzBadge" class="badge-tz"></span>
+              </label>
+              <input type="datetime-local" id="sEnd" required onchange="onScheduleDatesChanged()" oninput="onScheduleDatesChanged()">
+              <div class="preset-chips">
+                <button type="button" class="chip" onclick="addScheduleDuration(30)">+30m reales</button>
+                <button type="button" class="chip" onclick="addScheduleDuration(60)">+1h real</button>
+                <button type="button" class="chip" onclick="addScheduleDuration(90)">+1h 30m</button>
+                <button type="button" class="chip" onclick="addScheduleDuration(120)">+2h reales</button>
+                <button type="button" class="chip" onclick="addScheduleDuration(180)">+3h reales</button>
+                <button type="button" class="chip" onclick="addScheduleDuration(240)">+4h reales</button>
+              </div>
+              <div id="sEndAmbiguousBox" class="dst-fold-box" style="display:none;">
+                <div>⚠️ <strong>Cambio de hora:</strong> Esta hora ocurre dos veces esta noche. ¿Cuál quieres usar?</div>
+                <div class="dst-fold-options">
+                  <button type="button" id="sEndFold0" class="fold-btn active" onclick="setFold('end', 0)">☀️ 1ª vez · Horario verano (UTC+2)</button>
+                  <button type="button" id="sEndFold1" class="fold-btn" onclick="setFold('end', 1)">❄️ 2ª vez · Horario invierno (UTC+1)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resumen en vivo de duración y cambio de hora -->
+          <div id="schedulePreview" class="schedule-preview">
+            <div id="schedulePreviewText">Selecciona inicio y fin para calcular la duración real.</div>
+            <div id="schedulePreviewDuration" class="mono-input" style="font-weight:700;color:#60a5fa;font-size:15px;">--:--:--</div>
+          </div>
+
+          <div class="form-row-3">
+            <div class="form-group">
+              <label><span>📝 Nombre del archivo</span></label>
+              <input type="text" id="sFilename" required>
+            </div>
+            <div class="form-group">
+              <label><span>📦 Contenedor</span></label>
+              <select id="sFormat">
+                <option value="mp4">MP4 (.mp4)</option>
+                <option value="mkv">MKV (.mkv)</option>
+                <option value="ts">MPEG-TS (.ts)</option>
+                <option value="avi">AVI (.avi)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>
+                <span>🌍 País VPN para esta tarea</span>
+                <span style="font-weight:400;font-size:11px;color:#6ee7b7">Auto-restaura al acabar</span>
+              </label>
+              <select id="sVpnCountry">
+                <option value="">🛡️ Mantener país actual</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="btn-group">
+            <button type="submit" class="btn-primary" style="width:100%;">📅 Guardar programación</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel-card" style="margin-bottom:0;">
+        <div class="card-header">
+          <div class="card-title">📋 Cola de grabaciones programadas</div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-secondary btn-sm" onclick="loadSchedules()">🔄 Actualizar</button>
+            <button class="btn-danger btn-sm" onclick="clearSchedules()">🗑️ Limpiar finalizadas</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Archivo / VPN</th>
+                <th>Inicio programado</th>
+                <th>Fin programado</th>
+                <th>Duración real</th>
+                <th>Fmt</th>
+                <th>Estado</th>
+                <th>Cuenta atrás / Detalle</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="scheduleBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: CANALES M3U -->
+    <div id="channelsView" style="display:none;">
+      <div class="panel-card" style="margin-bottom:0;">
+        <div class="card-header">
+          <div>
+            <div class="card-title">📺 Explorador de Canales M3U</div>
+            <div style="font-size:12.5px;color:var(--text-secondary);margin-top:4px;" id="m3uStatusInfo">{% if channels_count %}<strong style='color:#6ee7b7'>✅ Lista cargada con {{ channels_count }} canales ({{ groups_count }} categorías).</strong>{% else %}<strong style='color:#fda4af'>⚠️ No se encontró el archivo {{ m3u_file }} en el servidor.</strong>{% endif %}</div>
+          </div>
+          <button class="btn-secondary btn-sm" onclick="reloadM3uServer()">🔄 Recargar archivo lista.m3u</button>
+        </div>
+
+        <div class="search-bar">
+          <input type="text" id="searchInput" placeholder="🔍 Escribe el nombre del canal (ej. La 1, Movistar, DAZN, Eurosport...)" oninput="debouncedSearch()" onkeypress="if(event.key === 'Enter') searchChannels()">
+          <select id="groupFilter" onchange="searchChannels()">
+            <option value="">📂 Todas las categorías</option>
+          </select>
+          <button class="btn-primary" onclick="searchChannels()">Buscar</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:12.5px;color:var(--text-secondary);">
+          <span>Selecciona un canal para copiar su enlace o enviarlo directamente al grabador.</span>
+          <span id="resultsInfo"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Canal</th>
+                <th>Categoría</th>
+                <th style="width:270px;text-align:right;">Acciones rápidas</th>
+              </tr>
+            </thead>
+            <tbody id="channelsBody">
+              <tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:36px;">Escribe para buscar o selecciona una categoría</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: HISTORIAL -->
+    <div id="historyView" style="display:none;">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total grabaciones</div>
+          <div class="stat-value" id="statTotal">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Completadas con éxito</div>
+          <div class="stat-value" style="color:var(--accent-emerald);" id="statOk">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fallidas / Interrumpidas</div>
+          <div class="stat-value" style="color:var(--accent-rose);" id="statFailed">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Espacio ocupado</div>
+          <div class="stat-value" style="color:#60a5fa;" id="statSize">0 B</div>
+        </div>
+      </div>
+
+      <div class="panel-card" style="margin-bottom:0;">
+        <div class="card-header">
+          <div class="card-title">📜 Histórico de grabaciones</div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-secondary btn-sm" onclick="loadHistory()">🔄 Recargar</button>
+            <button class="btn-danger btn-sm" onclick="clearHistory()">🗑️ Vaciar registro</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Archivo / VPN</th>
+                <th>Modo</th>
+                <th>Inicio real</th>
+                <th>Dur. pedida</th>
+                <th>Dur. grabada</th>
+                <th>Tamaño</th>
+                <th>Estado</th>
+                <th style="text-align:right;">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Modal Modo Cine con Reproductor Pro y Selector Multipista de Audio -->
+<div class="player-modal-backdrop" id="playerModalBackdrop" onclick="if(event.target===this) closeVideoPlayer()">
+  <div class="player-modal">
+    <div class="player-modal-header">
+      <div class="player-modal-title">
+        <span>🎬</span>
+        <span class="fname" id="playerModalTitle">Reproductor</span>
+        <span class="badge-tz" id="playerCodecBadge" style="display:none;"></span>
+      </div>
+      <button type="button" class="player-close-btn" onclick="closeVideoPlayer()">✕ Cerrar (Esc)</button>
+    </div>
+
+    <div class="video-stage" id="videoStage" onmousemove="onPlayerMouseMove()" ontouchstart="onPlayerMouseMove()" ondblclick="togglePlayerFullscreen()">
+      <video id="proVideo" playsinline preload="metadata" onclick="togglePlayPause()"></video>
+
+      <div class="v-controls" id="vControls" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()">
+        <div class="v-timeline" id="vTimeline" onmousemove="onTimelineHover(event)" onclick="onTimelineSeek(event)">
+          <div class="v-timeline-fill" id="vTimelineFill">
+            <div class="v-timeline-thumb"></div>
+          </div>
+          <div class="v-timeline-tooltip" id="vTimelineTooltip">00:00:00</div>
+        </div>
+
+        <div class="v-bar-row">
+          <div class="v-bar-left">
+            <button type="button" class="v-btn" id="vPlayBtn" onclick="togglePlayPause()" title="Play / Pausa (Espacio)">▶️</button>
+            <button type="button" class="v-btn" onclick="skipPlayerTime(-10)" title="Retroceder 10s (←)">⏪ 10s</button>
+            <button type="button" class="v-btn" onclick="skipPlayerTime(10)" title="Adelantar 10s (→)">10s ⏩</button>
+            <button type="button" class="v-btn" id="vMuteBtn" onclick="togglePlayerMute()" title="Silenciar (M)">🔊</button>
+            <input type="range" class="v-vol-slider" id="vVolSlider" min="0" max="1" step="0.05" value="1" oninput="onVolumeChange(this.value)">
+            <span class="v-time" id="vTimeLabel">00:00:00 / 00:00:00</span>
+          </div>
+
+          <div class="v-bar-right">
+            <!-- Selector integrado de Pista de Audio -->
+            <div class="v-menu-wrap">
+              <button type="button" class="v-btn" id="vAudioBtn" onclick="togglePlayerPopup('vAudioMenu')" title="Seleccionar pista de audio">
+                🎧 <span id="vAudioBtnText">Audio</span>
+              </button>
+              <div class="v-popup-menu" id="vAudioMenu">
+                <div class="v-popup-title">🎧 Pistas de audio</div>
+                <div id="vAudioMenuItems"></div>
+              </div>
+            </div>
+
+            <!-- Selector integrado de Velocidad -->
+            <div class="v-menu-wrap">
+              <button type="button" class="v-btn" id="vSpeedBtn" onclick="togglePlayerPopup('vSpeedMenu')" title="Velocidad de reproducción">
+                ⚡ <span id="vSpeedBtnText">1x</span>
+              </button>
+              <div class="v-popup-menu" id="vSpeedMenu" style="min-width:130px;">
+                <div class="v-popup-title">⚡ Velocidad</div>
+                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(0.75)"><span>0.75x</span></button>
+                <button type="button" class="v-menu-item active" onclick="setPlayerSpeed(1)"><span>1x (Normal)</span></button>
+                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(1.25)"><span>1.25x</span></button>
+                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(1.5)"><span>1.5x</span></button>
+                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(2)"><span>2x</span></button>
+              </div>
+            </div>
+
+            <button type="button" class="v-btn" onclick="togglePlayerFullscreen()" title="Pantalla completa (F)">⛶</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="player-modal-footer">
+      <div id="playerModeInfo">⚡ Streaming directo desde disco (0% CPU · 0 bytes extra)</div>
+      <div class="player-footer-actions">
+        <a id="playerVlcBtn" href="#" class="btn-warning btn-sm" style="text-decoration:none;">🟠 Abrir en VLC</a>
+        <button type="button" class="btn-secondary btn-sm" onclick="copyCurrentStreamUrl()">🔗 Copiar URL Stream</button>
+        <a id="playerDownloadBtn" href="#" class="btn-success btn-sm" style="text-decoration:none;">⬇️ Descargar</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
+</body>
+</html>

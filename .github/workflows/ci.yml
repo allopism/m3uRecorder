@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: Lint y tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Tests (pytest)
+        run: pytest -v
+
+  docker:
+    name: Imagen Docker
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir la imagen
+        run: docker build -t m3urecorder:ci .
+      - name: Arrancar y comprobar /healthz
+        run: |
+          docker run -d --name app -p 5000:5000 -e VPN_ENABLED=false m3urecorder:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5000/healthz && exit 0
+            sleep 1
+          done
+          docker logs app
+          exit 1
