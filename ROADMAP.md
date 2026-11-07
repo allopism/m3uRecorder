@@ -124,6 +124,18 @@ Repositorio aparte (`m3u-app`, Kotlin + Jetpack Compose + Media3).
       por archivo (`ui/screens`), piezas comunes (`ui/components`), tema y utilidades
       aparte; dependencias al día (Compose BOM 2026.08, Lifecycle 2.10) y pruebas
       unitarias (`./gradlew test`).
-- [ ] **D. Rediseño a juego con la web:** iconos, claro/oscuro, logos, miniaturas,
-      panel único de grabar/programar; mostrar progreso sin el texto crudo de ffmpeg.
-- [ ] **E. Publicación:** firma propia, APK minimizado, versión y capturas.
+- [x] **D. Rediseño a juego con la web:** mismos colores (claro, oscuro o según el
+      sistema), iconos Material; dos pestañas (Canales y Grabaciones); cuadrícula de
+      canales con logos (Coil, también SVG) o monograma; panel inferior único para
+      grabar ahora o programar; barra "Grabando" legible; Próximas con cuenta atrás,
+      biblioteca con miniaturas y programaciones anteriores.
+- [x] **E. Publicación (parte 1):** firma propia (clave fuera del repositorio, datos en
+      `keystore.properties`, ignorado por git), R8 activado (APK de 84 MB → 4,8 MB),
+      versión 2.0.0 mostrada en Ajustes. APK final en `dist/m3uRecorder-2.0.0.apk`.
+- [ ] **Pendiente (siguiente sesión):**
+  - [ ] Cambio de hora de octubre: dejar elegir 1.ª o 2.ª vez al programar la hora
+        repetida (como la web), en lugar de usar siempre la primera.
+  - [ ] Probar en tablet y en horizontal (cuadrículas, panel inferior, reproductor).
+  - [ ] Actualizar Kotlin (2.2 → 2.3/2.4) y, con ello, Coil a su última versión.
+  - [ ] Al cerrar los dos proyectos: README de la app con capturas, repositorios en
+        GitHub y APK como "Release".
