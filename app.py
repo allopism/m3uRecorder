@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, render_template_string, request, jsonify, send_from_directory, Response
+from flask import (Flask, request, jsonify, send_from_directory, Response,
+                   session, redirect, url_for)
 import subprocess
 import os
 import re
@@ -7,6 +8,8 @@ import signal
 import threading
 import time
 import uuid
+import hmac
+import hashlib
 from datetime import datetime, timezone, timedelta
 import json
 import sys
@@ -33,6 +36,15 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TZ_NAME = os.environ.get("TZ", "Europe/Madrid")
 GLUETUN_CONTROL_URL = os.environ.get("GLUETUN_CONTROL_URL", "http://127.0.0.1:8000").rstrip("/")
+GLUETUN_API_KEY = os.environ.get("GLUETUN_API_KEY", "").strip()
+VPN_PROVIDER = os.environ.get("VPN_SERVICE_PROVIDER", "protonvpn").strip().lower() or "protonvpn"
+# Token de acceso a la web y a la API. Vacío = sin autenticación (solo para redes de confianza).
+APP_TOKEN = os.environ.get("APP_TOKEN", "").strip()
+AUTH_ENABLED = bool(APP_TOKEN)
+# Protocolos de entrada permitidos. Sin esta lista, ffmpeg aceptaría también file:,
+# concat:, etc., y se podrían "grabar" archivos internos del contenedor.
+ALLOWED_URL_SCHEMES = {'http', 'https', 'rtmp', 'rtmps', 'rtsp', 'rtsps',
+                       'udp', 'rtp', 'srt', 'mms', 'mmsh'}
 # Pon VPN_ENABLED=false para usar la app sin Gluetun (se ocultan los controles de VPN)
 VPN_ENABLED = os.environ.get("VPN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 VPN_REFRESH_SEC = 5
@@ -67,7 +79,7 @@ vpn_state_cache = {
     "ip_city": "",
     "configured_country": "",
     "default_country": "",
-    "provider": "protonvpn",
+    "provider": VPN_PROVIDER,
     "switching": False,
     "enabled": VPN_ENABLED,
 }
@@ -106,6 +118,14 @@ status = {
 }
 
 app = Flask(__name__)
+# La clave de sesión se deriva del token: si cambias APP_TOKEN, todas las sesiones caducan.
+app.secret_key = hmac.new((APP_TOKEN or uuid.uuid4().hex).encode(), b"m3urecorder-session",
+                          hashlib.sha256).digest()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,      # el JavaScript de la página no puede leer la cookie
+    SESSION_COOKIE_SAMESITE='Lax',     # otras webs no pueden enviar formularios con tu sesión
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -251,11 +271,11 @@ def send_telegram_message(text):
 #  Integración con Gluetun Control Server (VPN)
 # ─────────────────────────────────────────────
 def load_vpn_countries():
-    """Carga la lista de países disponibles en ProtonVPN desde vpn/servers/protonvpn.json o fallback."""
+    """Carga los países del proveedor VPN desde los datos de servidores de Gluetun (o una lista base)."""
     global vpn_countries_list
     candidates = [
-        os.path.join("vpn", "servers", "protonvpn.json"),
-        "/gluetun/servers/protonvpn.json",
+        os.path.join("/gluetun", "servers", f"{VPN_PROVIDER}.json"),
+        os.path.join("vpn", "servers", f"{VPN_PROVIDER}.json"),
     ]
     found_countries = set()
     for path in candidates:
@@ -285,7 +305,7 @@ def load_vpn_countries():
 def _gluetun_request(method: str, path: str, payload=None, timeout: float = 4.0):
     url = f"{GLUETUN_CONTROL_URL}{path}"
     data = None
-    headers = {}
+    headers = {"X-API-Key": GLUETUN_API_KEY} if GLUETUN_API_KEY else {}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -611,6 +631,13 @@ def emit_app_notification(title: str, body: str, event_type: str = "info", filen
 # ─────────────────────────────────────────────
 #  Utilidades
 # ─────────────────────────────────────────────
+def is_allowed_stream_url(url: str) -> bool:
+    try:
+        return urllib.parse.urlsplit(url.strip()).scheme.lower() in ALLOWED_URL_SCHEMES
+    except Exception:
+        return False
+
+
 def human_size(num):
     try:
         num = float(num)
@@ -2703,6 +2730,7 @@ HTML_TEMPLATE = r'''
         </select>
       </div>
 
+      LOGOUT_LINK
       <div class="pill pill-clock" title="Hora local actual y zona horaria activa">
         <span>🕐</span>
         <span id="serverClock">--:--:--</span>
@@ -3147,6 +3175,13 @@ HTML_TEMPLATE = r'''
 </div>
 
 <script>
+// Si la sesión caduca, cualquier llamada a la API devuelve 401: volver al login
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await _nativeFetch(...args);
+  if (res.status === 401) window.location.href = '/login';
+  return res;
+};
 // ── Utilidades generales y Toasts ──────────────────────────────────
 function showToast(msg, type = 'info') {
   const c = document.getElementById('toastContainer');
@@ -4055,8 +4090,8 @@ async function openVideoPlayer(filename) {
   document.getElementById('playerCodecBadge').style.display = 'none';
   document.getElementById('playerModalBackdrop').classList.add('open');
 
-  const directUrl = window.location.origin + '/stream/' + encodeURIComponent(filename);
-  document.getElementById('playerVlcBtn').href = 'vlc://' + directUrl;
+  pState.shareUrl = window.location.origin + '/stream/' + encodeURIComponent(filename);
+  document.getElementById('playerVlcBtn').href = 'vlc://' + pState.shareUrl;
   document.getElementById('playerDownloadBtn').href = '/download/' + encodeURIComponent(filename);
 
   // Consultar metadatos y pistas de audio reales con ffprobe
@@ -4065,6 +4100,11 @@ async function openVideoPlayer(filename) {
     const info = await res.json();
     pState.duration = Number(info.duration) || 0;
     pState.audioTracks = info.audio_tracks || [];
+    // Con autenticación activa, VLC u otros reproductores necesitan un enlace firmado
+    if (info.sig) {
+      pState.shareUrl += '?sig=' + encodeURIComponent(info.sig);
+      document.getElementById('playerVlcBtn').href = 'vlc://' + pState.shareUrl;
+    }
 
     const badge = document.getElementById('playerCodecBadge');
     const parts = [];
@@ -4278,7 +4318,7 @@ function onPlayerMouseMove() {
 }
 
 function copyCurrentStreamUrl() {
-  const url = window.location.origin + '/stream/' + encodeURIComponent(pState.filename);
+  const url = pState.shareUrl || (window.location.origin + '/stream/' + encodeURIComponent(pState.filename));
   copyToClipboard(url, pState.filename);
 }
 
@@ -4313,12 +4353,111 @@ document.addEventListener('keydown', e => {
 # ─────────────────────────────────────────────
 #  Rutas Flask
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  Autenticación
+# ─────────────────────────────────────────────
+# Rutas accesibles sin sesión
+PUBLIC_ENDPOINTS = {'login', 'healthz'}
+# Rutas de archivos que aceptan un enlace firmado (?sig=) para abrirlos en VLC u otro reproductor
+SIGNED_FILE_ENDPOINTS = {'stream_video', 'download'}
+
+LOGIN_TEMPLATE = r'''<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acceso · M3U8 Stream Recorder</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b1120;
+         font-family: Inter, system-ui, sans-serif; color:#e2e8f0; padding:16px; box-sizing:border-box; }
+  form { width:100%; max-width:360px; background:#111a2e; border:1px solid #1e2a44; border-radius:16px;
+         padding:28px; box-shadow:0 20px 50px rgba(0,0,0,.4); }
+  h1 { font-size:18px; margin:0 0 6px; } p { margin:0 0 20px; color:#94a3b8; font-size:13.5px; }
+  input { width:100%; box-sizing:border-box; padding:11px 13px; border-radius:10px; border:1px solid #2a3a5c;
+          background:#0b1120; color:#f8fafc; font-size:15px; }
+  input:focus { outline:2px solid #6366f1; border-color:transparent; }
+  button { margin-top:14px; width:100%; padding:11px; border:0; border-radius:10px; background:#6366f1;
+           color:#fff; font-weight:600; font-size:15px; cursor:pointer; }
+  button:hover { background:#4f46e5; }
+  .error { margin-top:12px; color:#fda4af; font-size:13px; }
+</style></head>
+<body>
+  <form method="post" action="/login">
+    <h1>🎬 M3U8 Stream Recorder</h1>
+    <p>Introduce el token de acceso (variable <code>APP_TOKEN</code>).</p>
+    <input type="password" name="token" placeholder="Token de acceso" autocomplete="current-password" autofocus required>
+    <button type="submit">Entrar</button>
+    ERROR_BLOCK
+  </form>
+</body></html>'''
+
+
+def _token_matches(candidate: str) -> bool:
+    # compare_digest tarda lo mismo acierte o falle: no da pistas sobre el token por tiempos
+    return bool(candidate) and hmac.compare_digest(candidate.encode(), APP_TOKEN.encode())
+
+
+def file_signature(filename: str) -> str:
+    """Firma de solo lectura para un archivo concreto (permite abrirlo en VLC sin compartir el token)."""
+    return hmac.new(app.secret_key, f"file:{filename}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+@app.before_request
+def require_auth():
+    if not AUTH_ENABLED or request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    if session.get('auth') is True:
+        return None
+    # App Android / scripts: cabecera "Authorization: Bearer <token>"
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer ') and _token_matches(auth_header[7:].strip()):
+        return None
+    if request.endpoint in SIGNED_FILE_ENDPOINTS:
+        fname = os.path.basename((request.view_args or {}).get('filename', ''))
+        sig = request.args.get('sig', '')
+        if sig and hmac.compare_digest(sig, file_signature(fname)):
+            return None
+    if request.endpoint == 'index':
+        return redirect(url_for('login'))
+    return jsonify({'error': 'No autorizado'}), 401
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if not AUTH_ENABLED or session.get('auth') is True:
+        return redirect(url_for('index'))
+    error = ""
+    if request.method == 'POST':
+        if _token_matches(request.form.get('token', '').strip()):
+            session.clear()
+            session.permanent = True
+            session['auth'] = True
+            return redirect(url_for('index'))
+        time.sleep(1)  # frena los intentos de adivinar el token a fuerza bruta
+        sys_log(f"Intento de acceso fallido desde {request.remote_addr}")
+        error = '<div class="error">Token incorrecto</div>'
+    return LOGIN_TEMPLATE.replace('ERROR_BLOCK', error), (401 if error else 200)
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login') if AUTH_ENABLED else url_for('index'))
+
+
+@app.route('/healthz')
+def healthz():
+    """Para el HEALTHCHECK de Docker: responde si el servidor web está vivo."""
+    return jsonify({'ok': True})
+
+
 @app.route('/')
 def index():
     now_str = now_local().strftime('%Y%m%d_%H%M%S')
     # El progreso incluye texto de ffmpeg (URL, metadatos del stream): escaparlo siempre
     html = HTML_TEMPLATE.replace('READY_STATUS', html_escape(status['progress']))
     html = html.replace('NOWTS', now_str)
+    logout = ('<a class="pill" href="/logout" title="Cerrar sesión" style="text-decoration:none">🔒 Salir</a>'
+              if AUTH_ENABLED else '')
+    html = html.replace('LOGOUT_LINK', logout)
     html = html.replace('CHANNELS_COUNT', str(len(channels_db)))
 
     if len(channels_db) > 0:
@@ -4397,6 +4536,8 @@ def record():
 
     if not url or hhmmss_to_seconds(duration) <= 0:
         return jsonify({'error': 'URL o duración inválida'}), 400
+    if not is_allowed_stream_url(url):
+        return jsonify({'error': 'Protocolo de URL no permitido'}), 400
     if format_ext not in FORMAT_MUXERS:
         return jsonify({'error': f'Formato no soportado: {format_ext}'}), 400
 
@@ -4548,7 +4689,8 @@ def api_media_info(filename):
         return jsonify({
             "duration": duration,
             "video_codec": video_codec,
-            "audio_tracks": audio_tracks
+            "audio_tracks": audio_tracks,
+            "sig": file_signature(safe_name) if AUTH_ENABLED else ""
         })
     except Exception as e:
         return jsonify({
@@ -4652,6 +4794,8 @@ def create_schedule():
 
     if not all([url, start_str, end_str, raw_name]):
         return jsonify({'error': 'Faltan campos obligatorios'}), 400
+    if not is_allowed_stream_url(url):
+        return jsonify({'error': 'Protocolo de URL no permitido'}), 400
     if format_ext not in FORMAT_MUXERS:
         return jsonify({'error': f'Formato no soportado: {format_ext}'}), 400
 
@@ -4812,5 +4956,9 @@ def _handle_shutdown(signum, frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
-    sys_log("Iniciando aplicación Flask...")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    if not AUTH_ENABLED:
+        sys_log("Aviso: APP_TOKEN no está definido; la web y la API no piden autenticación.")
+    from waitress import serve
+    threads = int(os.environ.get("WEB_THREADS", "16"))
+    sys_log(f"Iniciando servidor web (waitress, {threads} hilos) en el puerto 5000...")
+    serve(app, host='0.0.0.0', port=5000, threads=threads, ident=None)

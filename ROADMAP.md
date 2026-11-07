@@ -48,22 +48,26 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
         otra programada empieza justo después, se corta a la hora exacta y se le
         cede el grabador.
 
-## Fase 2 — Seguridad (imprescindible antes de publicar)
+## Fase 2 — Seguridad (imprescindible antes de publicar) ✅
 
-1. [ ] **Autenticación por token** (`APP_TOKEN` en `.env`): login sencillo en la
-       web y cabecera `Authorization` para la app Android.
-2. [ ] **Lista blanca de protocolos** para la URL (`http`, `https`, `rtmp`,
-       `rtsp`, `udp`…). La de formatos ya está hecha (y WebM eliminado).
-3. [ ] **Servidor de producción** (waitress) en lugar del servidor de desarrollo.
-4. [ ] **Dockerfile:** usuario no-root, `HEALTHCHECK`, no copiar `vpn/` ni la
-       lista; leer los países desde el volumen de Gluetun.
-5. [ ] Proteger la API de control de Gluetun (hoy `auth = "none"`). Riesgo bajo: el
-       puerto 8000 no se publica, solo es accesible desde la red compartida.
+1. [x] **Autenticación por token** (`APP_TOKEN`): login en la web con cookie de sesión
+       (HttpOnly, SameSite) y cabecera `Authorization: Bearer` para la app Android.
+       Enlaces firmados por archivo (`?sig=`) para abrir grabaciones en VLC sin
+       compartir el token. Sin `APP_TOKEN` la app funciona como antes.
+2. [x] **Lista blanca de protocolos** para la URL (`http`, `https`, `rtmp`, `rtsp`,
+       `udp`, `srt`…): bloquea `file:`, `concat:`, etc. Formatos de salida limitados.
+3. [x] **Servidor de producción** (waitress) en lugar del servidor de desarrollo.
+4. [x] **Dockerfile:** usuario sin privilegios (UID configurable con `PUID`/`PGID`),
+       `HEALTHCHECK` en `/healthz`, solo se copia `app.py`; países VPN leídos del
+       volumen de Gluetun según `VPN_SERVICE_PROVIDER`.
+5. [x] **API de control de Gluetun con clave** (`GLUETUN_API_KEY`). Se elimina
+       `vpn/auth/config.toml`, que tenía prioridad y la dejaba abierta.
 
 ## Fase 3 — Estructura del código (lo que más luce en el portfolio)
 
 1. [ ] Sacar el HTML/CSS/JS a `templates/` y `static/` (≈2.750 líneas fuera de `app.py`).
-2. [ ] Dividir el backend en módulos: `recorder`, `scheduler`, `vpn`, `storage`, `api`.
+2. [ ] Dividir el backend en módulos: `recorder`, `scheduler`, `vpn`, `storage`, `api`
+       (actualizar el `COPY` del Dockerfile y el volumen de `app.py` de tu servidor).
 3. [ ] Unificar grabación inmediata y programada (una inmediata = programada que
        empieza ya) → eliminar ~200 líneas duplicadas. De paso, liberar el grabador
        antes de la conversión final: hoy la siguiente programada espera a que
@@ -91,5 +95,6 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 
 ## App Android (companion)
 
-Se revisa después de la Fase 2, ya que tendrá que adaptarse al token de
-autenticación y a los cambios de la API.
+Pendiente de revisar. Si se activa `APP_TOKEN`, tendrá que enviar la cabecera
+`Authorization: Bearer <token>` en cada petición y usar el campo `sig` de
+`/api/media-info` para reproducir o descargar grabaciones.

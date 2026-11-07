@@ -12,8 +12,8 @@ lista.m3u
 *.m3u
 *.m3u8
 
-# Caché de servidores que regenera Gluetun (~390k líneas)
-vpn/servers/
+# Datos de Gluetun: caché de servidores (~390k líneas) y config de auth local
+vpn/
 
 # Secretos
 .env
