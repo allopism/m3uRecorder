@@ -235,6 +235,25 @@ def evaluate_recording(returncodes, path, requested_sec, was_stopped=False, by_s
     return ("ok" if ok_duration and size > 0 else "failed"), reasons, size, duration
 
 
+def make_thumbnail(video_path: str, out_path: str) -> bool:
+    """Saca un fotograma (al 10 % del vídeo, máx. 60 s) como JPG de 480 px de ancho."""
+    duration = probe_duration(video_path)
+    at = min(max(duration * 0.1, 1), 60) if duration > 2 else 0
+    tmp = out_path + ".tmp.jpg"
+    try:
+        res = subprocess.run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-ss", f"{at:.1f}",
+                              "-i", video_path, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", tmp],
+                             capture_output=True, timeout=30)
+        if res.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+            os.replace(tmp, out_path)
+            return True
+        return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        remove_quietly(tmp)
+
+
 def media_info(path: str) -> dict:
     """Duración, códec de vídeo y pistas de audio, para el reproductor de la web."""
     res = subprocess.run(

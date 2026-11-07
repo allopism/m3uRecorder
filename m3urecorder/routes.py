@@ -23,6 +23,16 @@ def svc():
     return current_app.extensions['m3u']
 
 
+def _asset_version() -> str:
+    """Cambia cuando cambian el CSS o el JS: el navegador nunca usa una copia vieja en caché."""
+    static = os.path.join(os.path.dirname(__file__), 'static')
+    try:
+        newest = max(os.path.getmtime(os.path.join(static, p)) for p in ('css/app.css', 'js/app.js'))
+    except OSError:
+        return APP_VERSION
+    return f"{APP_VERSION}-{int(newest)}"
+
+
 def error(msg: str, code: int = 400):
     return jsonify({'error': msg}), code
 
@@ -45,7 +55,7 @@ def index():
     s = svc()
     return render_template(
         'index.html',
-        version=APP_VERSION,
+        version=_asset_version(),
         ready_status=s.recorder.status['progress'],
         now_ts=now_local().strftime('%Y%m%d_%H%M%S'),
         channels_count=len(s.channels.channels),
@@ -156,6 +166,35 @@ def api_notifications():
                     'events': store.since(_int_arg(request.args.get('since_id')))})
 
 
+# ── Imágenes ──────────────────────────────────
+@bp.route('/logo/<logo_id>')
+def channel_logo(logo_id):
+    s = svc()
+    if not logo_id.isalnum():
+        return error('Logo no válido', 404)
+    hit = s.logos.get(logo_id, s.channels.logo_url(logo_id))
+    if not hit:
+        return error('Sin logo', 404)
+    path, mime = hit
+    resp = send_from_directory(os.path.dirname(path), os.path.basename(path), mimetype=mime, max_age=7 * 86400)
+    # Un SVG abierto directamente podría ejecutar scripts: se sirve aislado
+    resp.headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    return resp
+
+
+@bp.route('/thumb/<path:filename>')
+def recording_thumb(filename):
+    s = svc()
+    safe, _ = _media_path(filename)
+    if os.path.splitext(safe)[1].lower() not in MEDIA_EXTENSIONS or s.recorder.is_in_progress(safe):
+        return error('Sin miniatura', 404)
+    thumb = s.thumbnails.get(safe)
+    if not thumb:
+        return error('Sin miniatura', 404)
+    return send_from_directory(os.path.dirname(thumb), os.path.basename(thumb), mimetype='image/jpeg', max_age=86400)
+
+
 # ── Archivos ──────────────────────────────────
 @bp.route('/download/<path:filename>')
 def download(filename):
@@ -244,6 +283,7 @@ def delete_recording(filename):
             os.remove(path)
         except OSError as e:
             return error(f'Error eliminando archivo: {e}', 500)
+    s.thumbnails.remove(safe)
     s.history.remove_where(lambda it: it.get('filename') == safe)
     return jsonify({'message': f'Grabación eliminada: {safe}'})
 
@@ -290,12 +330,14 @@ def create_schedule():
         return error(f"Se solapa en horario con otra programación activa ({clash.get('filename')})")
 
     filename = s.recorder.unique_filename(sanitize_basename(raw_name, format_ext), format_ext)
+    channel = s.channels.find_by_url(url) or {}
     job = {
         "id": str(uuid.uuid4()), "url": url, "filename": filename, "format": format_ext,
         "start_time": start_dt.isoformat(), "end_time": end_dt.isoformat(),
         "duration_seconds": duration, "vpn_country": vpn_country, "restore_vpn": True,
         "status": "pending", "status_reason": "", "created_at": now_local().isoformat(),
         "actual_start": None, "actual_end": None,
+        "channel": channel.get("name", ""), "logo_id": channel.get("logo_id", ""),
     }
     s.schedules.append(job)
     vpn_txt = f" | VPN: {vpn_country}" if vpn_country else ""

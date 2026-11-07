@@ -90,6 +90,11 @@ class Settings:
         return bool(self.app_token)
 
     @property
+    def cache_dir(self) -> str:
+        """Logos y miniaturas (carpeta oculta dentro de las grabaciones)."""
+        return os.path.join(self.output_dir, ".cache")
+
+    @property
     def history_file(self) -> str:
         return os.path.join(self.output_dir, "recordings.json")
 

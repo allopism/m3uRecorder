@@ -77,10 +77,22 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 5. [x] 61 tests con pytest, incluidas grabaciones reales con ffmpeg.
 6. [x] CI con GitHub Actions: ruff, pytest y construcción de la imagen con healthcheck.
 
+## Rediseño de la interfaz ✅
+
+- [x] Dos secciones (Canales y Grabaciones) en lugar de cuatro pestañas.
+- [x] Canales en cuadrícula con sus logos (proxy con caché en el servidor y protección
+      contra SSRF) y monogramas de color fijo para los que no tienen logo.
+- [x] Un solo panel para grabar ahora o programar; el selector del cambio de hora solo
+      aparece cuando la hora es ambigua.
+- [x] Barra fija de grabación en curso con logo, tiempo y progreso.
+- [x] Biblioteca con miniaturas generadas con ffmpeg y el logo del canal encima.
+- [x] Tema claro, oscuro y automático; adaptada a móvil (navegación inferior, panel
+      que sube desde abajo, biblioteca en lista).
+- [x] Iconos SVG propios y fuente del sistema: ninguna petición a terceros.
+
 ## Fase 4 — Presentación
 
 - [ ] README con capturas/GIF, diagrama de arquitectura y guía de despliegue.
-- [ ] Quitar "ProtonVPN" fijo del subtítulo de la interfaz (ahora el proveedor es configurable).
 - [ ] Licencia (MIT) y aviso de uso: solo streams públicos o con derechos.
 - [ ] Imagen publicada en GitHub Container Registry.
 

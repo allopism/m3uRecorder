@@ -1,3 +1,9 @@
+'use strict';
+
+// ════════════════════════════════════════════
+//  Base: fetch con sesión, utilidades y avisos
+// ════════════════════════════════════════════
+
 // Si la sesión caduca, cualquier llamada a la API devuelve 401: volver al login
 const _nativeFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
@@ -5,1165 +11,1009 @@ window.fetch = async (...args) => {
   if (res.status === 401) window.location.href = '/login';
   return res;
 };
-// ── Utilidades generales y Toasts ──────────────────────────────────
-function showToast(msg, type = 'info') {
-  const c = document.getElementById('toastContainer');
-  const t = document.createElement('div');
-  t.className = 'toast';
-  if (type === 'success') t.style.borderColor = '#10b981';
-  if (type === 'error')   t.style.borderColor = '#f43f5e';
-  t.textContent = msg;
-  c.appendChild(t);
-  setTimeout(() => { t.remove(); }, 3500);
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const M3U_FILE = document.body.dataset.m3uFile || 'lista.m3u';
+
+const state = {
+  view: 'channels',
+  status: null,
+  channels: [],
+  group: '',
+  query: '',
+  history: [],
+  schedules: [],
+  vpnCountries: null,
+  wasRunning: false,
+  sheet: null,
+};
+
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+const pad2 = n => String(n).padStart(2, '0');
 
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function pad2(n) { return String(n).padStart(2, '0'); }
-
-function secsToHHMMSS(s) {
+function hms(s) {
   s = Math.max(0, Math.round(Number(s) || 0));
-  return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60)) + ':' + pad2(s % 60);
+  return `${pad2(Math.floor(s / 3600))}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`;
+}
+
+function shortDuration(s) {
+  s = Math.max(0, Math.round(Number(s) || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(sec)}` : `${m}:${pad2(sec)}`;
 }
 
 function formatBytes(bytes) {
-  let b = Number(bytes) || 0;
+  let b = Number(bytes) || 0, i = 0;
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
   while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
-  return b.toFixed(i === 0 ? 0 : 2) + ' ' + units[i];
+  return `${b.toLocaleString('es-ES', { maximumFractionDigits: i >= 3 ? 1 : 0 })} ${units[i]}`;
 }
 
-// ── Reloj en vivo con indicador de zona horaria (Verano/Invierno) ──
-function updateClock() {
-  const now = new Date();
-  const offsetMin = -now.getTimezoneOffset();
-  const sign = offsetMin >= 0 ? '+' : '-';
-  const absH = Math.floor(Math.abs(offsetMin) / 60);
-  const tzLabel = `UTC${sign}${absH}`;
-  document.getElementById('serverClock').textContent =
-    now.toLocaleTimeString('es-ES', { hour12: false }) + ' · ' + tzLabel;
-}
-setInterval(updateClock, 1000);
-updateClock();
+const fmtDay = d => d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
+const fmtTime = d => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+const stripExt = name => String(name || '').replace(/\.[a-z0-9]{2,4}$/i, '');
 
-// ── Carga y Control de Países VPN (Gluetun) ────────────────────────
-async function initVpnCountries() {
-  try {
-    const res = await fetch('/api/vpn/countries');
-    const data = await res.json();
-    const selects = [
-      { el: document.getElementById('topbarVpnSelect'), defaultLabel: '🌍 País...' },
-      { el: document.getElementById('rVpnCountry'),     defaultLabel: '🛡️ Usar país actual de la VPN (Sin cambiar)' },
-      { el: document.getElementById('sVpnCountry'),     defaultLabel: '🛡️ Mantener país actual de la VPN' }
-    ];
-
-    selects.forEach(({ el, defaultLabel }) => {
-      if (!el) return;
-      el.innerHTML = `<option value="">${defaultLabel}</option>`;
-      const grpFav = document.createElement('optgroup');
-      grpFav.label = '⭐ Países frecuentes';
-      (data.featured || []).forEach(item => {
-        const opt = document.createElement('option');
-        opt.value = item.value;
-        opt.textContent = item.label;
-        grpFav.appendChild(opt);
-      });
-      el.appendChild(grpFav);
-
-      if ((data.others || []).length > 0) {
-        const grpAll = document.createElement('optgroup');
-        grpAll.label = '🌐 Todos los países ProtonVPN';
-        data.others.forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c;
-          opt.textContent = c;
-          grpAll.appendChild(opt);
-        });
-        el.appendChild(grpAll);
-      }
-    });
-  } catch (e) {}
-}
-initVpnCountries();
-
-async function changeGlobalVpnCountry(country) {
-  const sel = document.getElementById('topbarVpnSelect');
-  if (!country) return;
-  const vDot = document.getElementById('vpnDot');
-  const vTxt = document.getElementById('vpnStatusText');
-  vDot.className = 'dot switching';
-  vTxt.textContent = `⏳ Conectando a ${country}...`;
-  showToast(`Cambiando VPN a ${country}... (tarda ~5-8s)`, 'info');
-
-  try {
-    const fd = new FormData();
-    fd.append('country', country);
-    const res = await fetch('/api/vpn/country', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (data.error) {
-      showToast('❌ ' + data.error, 'error');
-    } else {
-      showToast('✅ ' + (data.message || `Conectado a ${country}`), 'success');
-      log('🌍 VPN: ' + (data.message || country));
-    }
-  } catch (e) {
-    showToast('Error al cambiar el país de la VPN', 'error');
-  } finally {
-    sel.value = '';
-    checkServerStatus();
-  }
+function countdownText(target) {
+  const secs = Math.round((target - Date.now()) / 1000);
+  if (secs <= 0) return 'Empezando…';
+  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60);
+  if (d > 0) return `en ${d} d ${h} h`;
+  if (h > 0) return `en ${h} h ${m} min`;
+  return `en ${m}:${pad2(secs % 60)}`;
 }
 
-// ── Gestión de Pestañas ────────────────────────────────────────────
-function showTab(tab) {
-  ['record', 'schedule', 'channels', 'history'].forEach(t => {
-    document.getElementById(t + 'View').style.display = t === tab ? 'block' : 'none';
-    const id = 'tab' + t.charAt(0).toUpperCase() + t.slice(1);
-    const btn = document.getElementById(id);
-    if (btn) btn.classList.toggle('active', t === tab);
-  });
-  if (window.innerWidth <= 768) {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-  if (tab === 'history')  loadHistory();
-  if (tab === 'schedule') { initScheduleDefaults(); loadSchedules(); }
-  if (tab === 'channels') {
-    loadChannelGroups();
-    if (document.getElementById('searchInput').value === '' && document.getElementById('channelsBody').children.length <= 1) {
-      searchChannels();
-    }
-  }
+function icon(name, cls = '') {
+  return `<svg class="ico ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 }
 
-function log(msg) {
-  const d = document.getElementById('log');
-  const time = new Date().toLocaleTimeString('es-ES', { hour12: false });
-  d.innerHTML += `<span style="color:#64748b">[${time}]</span> ${escapeHtml(msg)}<br>`;
-  d.scrollTop = d.scrollHeight;
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = icon(type === 'ok' ? 'check' : type === 'error' ? 'alert' : 'clock') + `<span>${esc(msg)}</span>`;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), type === 'error' ? 6000 : 3500);
 }
 
-// ── Motor de Fechas y Cambios de Hora (DST Verano/Invierno) ────────
-let scheduleFolds = { start: 0, end: 0 };
-
-function parseLocalCandidates(localStr) {
-  if (!localStr || !localStr.includes('T')) return [];
-  const [dPart, tPart] = localStr.split('T');
-  const [Y, M, D] = dPart.split('-').map(Number);
-  const [h, m] = tPart.split(':').map(Number);
-
-  const base = new Date(Y, M - 1, D, h, m, 0, 0).getTime();
-  const candidates = [];
-  [-3600000, 0, 3600000].forEach(delta => {
-    const dt = new Date(base + delta);
-    if (
-      dt.getFullYear() === Y &&
-      dt.getMonth() === M - 1 &&
-      dt.getDate() === D &&
-      dt.getHours() === h &&
-      dt.getMinutes() === m
-    ) {
-      if (!candidates.some(c => c.getTime() === dt.getTime())) {
-        candidates.push(dt);
-      }
-    }
-  });
-  candidates.sort((a, b) => a.getTime() - b.getTime());
-  return candidates;
+async function api(url, options = {}) {
+  const res = await fetch(url, options);
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* respuesta sin JSON */ }
+  if (!res.ok && !data.error) data.error = `Error ${res.status}`;
+  return data;
 }
 
-function toIsoWithOffset(dateObj) {
-  const tzOffsetMin = -dateObj.getTimezoneOffset();
-  const sign = tzOffsetMin >= 0 ? '+' : '-';
-  const pad = n => String(Math.floor(Math.abs(n))).padStart(2, '0');
-  return dateObj.getFullYear() +
-    '-' + pad(dateObj.getMonth() + 1) +
-    '-' + pad(dateObj.getDate()) +
-    'T' + pad(dateObj.getHours()) +
-    ':' + pad(dateObj.getMinutes()) +
-    ':' + pad(dateObj.getSeconds()) +
-    sign + pad(tzOffsetMin / 60) + ':' + pad(tzOffsetMin % 60);
+function postForm(url, fields) {
+  const fd = new FormData();
+  Object.entries(fields || {}).forEach(([k, v]) => fd.append(k, v ?? ''));
+  return api(url, { method: 'POST', body: fd });
 }
 
-function formatOffsetBadge(dateObj) {
-  if (!dateObj || isNaN(dateObj.getTime())) return '';
-  const offH = -dateObj.getTimezoneOffset() / 60;
-  const sign = offH >= 0 ? '+' : '';
-  const season = offH === 2 ? 'Horario verano' : (offH === 1 ? 'Horario invierno' : '');
-  return `UTC${sign}${offH}${season ? ' · ' + season : ''}`;
-}
-
-function setFold(which, foldVal) {
-  scheduleFolds[which] = foldVal;
-  document.getElementById(which === 'start' ? 'sStartFold0' : 'sEndFold0').classList.toggle('active', foldVal === 0);
-  document.getElementById(which === 'start' ? 'sStartFold1' : 'sEndFold1').classList.toggle('active', foldVal === 1);
-  onScheduleDatesChanged();
-}
-
-function resolveInputDate(localStr, which) {
-  const cands = parseLocalCandidates(localStr);
-  const ambigBox = document.getElementById(which === 'start' ? 'sStartAmbiguousBox' : 'sEndAmbiguousBox');
-  if (cands.length > 1) {
-    ambigBox.style.display = 'block';
-    const idx = scheduleFolds[which] === 1 ? 1 : 0;
-    return { date: cands[idx], ambiguous: true, candidates: cands };
-  } else {
-    ambigBox.style.display = 'none';
-    if (cands.length === 1) {
-      return { date: cands[0], ambiguous: false, candidates: cands };
-    }
-    const fallback = new Date(localStr);
-    return { date: fallback, ambiguous: false, candidates: [fallback] };
-  }
-}
-
-function onScheduleDatesChanged() {
-  const sStartStr = document.getElementById('sStart').value;
-  const sEndStr   = document.getElementById('sEnd').value;
-  const preview   = document.getElementById('schedulePreview');
-  const pText     = document.getElementById('schedulePreviewText');
-  const pDur      = document.getElementById('schedulePreviewDuration');
-
-  if (!sStartStr || !sEndStr) {
-    pText.textContent = 'Selecciona fecha de inicio y fin.';
-    pDur.textContent = '--:--:--';
-    return;
-  }
-
-  const startRes = resolveInputDate(sStartStr, 'start');
-  let endRes     = resolveInputDate(sEndStr, 'end');
-
-  if (endRes.ambiguous && endRes.date <= startRes.date && endRes.candidates[1] > startRes.date && scheduleFolds.end === 0) {
-    scheduleFolds.end = 1;
-    document.getElementById('sEndFold0').classList.remove('active');
-    document.getElementById('sEndFold1').classList.add('active');
-    endRes = resolveInputDate(sEndStr, 'end');
-  }
-
-  document.getElementById('sStartTzBadge').textContent = formatOffsetBadge(startRes.date);
-  document.getElementById('sEndTzBadge').textContent   = formatOffsetBadge(endRes.date);
-
-  const diffSecs = Math.round((endRes.date.getTime() - startRes.date.getTime()) / 1000);
-  if (diffSecs <= 0) {
-    preview.classList.remove('has-dst');
-    pText.innerHTML = '<span style="color:#fda4af">⚠️ La hora de fin debe ser posterior a la hora de inicio.</span>';
-    pDur.textContent = '00:00:00';
-    return;
-  }
-
-  const startOff = -startRes.date.getTimezoneOffset();
-  const endOff   = -endRes.date.getTimezoneOffset();
-  pDur.textContent = secsToHHMMSS(diffSecs);
-
-  if (startOff !== endOff) {
-    preview.classList.add('has-dst');
-    const diffHours = (startOff - endOff) / 60;
-    const msgExtra = diffHours > 0
-      ? `Incluye cambio al horario de invierno (+${diffHours}h real de grabación garantizada)`
-      : `Incluye cambio al horario de verano (${diffHours}h real)`;
-    pText.innerHTML = `<strong style="color:#fde68a">🌙 ¡Cambio de hora detectado!</strong> ${msgExtra}`;
-  } else {
-    preview.classList.remove('has-dst');
-    pText.innerHTML = `✅ Grabación programada lista · Duración total en tiempo real:`;
-  }
-}
-
-function fmtDatetimeLocal(d) {
-  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
-    'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-}
-
-function setScheduleStartOffset(minutesFromNow) {
-  const start = new Date(Date.now() + minutesFromNow * 60000);
-  document.getElementById('sStart').value = fmtDatetimeLocal(start);
-  onScheduleDatesChanged();
-}
-
-function addScheduleDuration(realMinutes) {
-  const sStartStr = document.getElementById('sStart').value;
-  const startRes = sStartStr ? resolveInputDate(sStartStr, 'start') : { date: new Date(Date.now() + 300000) };
-  if (!sStartStr) {
-    document.getElementById('sStart').value = fmtDatetimeLocal(startRes.date);
-  }
-  const targetEnd = new Date(startRes.date.getTime() + realMinutes * 60000);
-  document.getElementById('sEnd').value = fmtDatetimeLocal(targetEnd);
-
-  const endCands = parseLocalCandidates(document.getElementById('sEnd').value);
-  if (endCands.length > 1) {
-    const isSecond = Math.abs(endCands[1].getTime() - targetEnd.getTime()) < Math.abs(endCands[0].getTime() - targetEnd.getTime());
-    setFold('end', isSecond ? 1 : 0);
-  } else {
-    onScheduleDatesChanged();
-  }
-}
-
-// ── Buscador de Canales M3U ────────────────────────────────────────
-let searchTimer = null;
-function debouncedSearch() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(searchChannels, 260);
-}
-
-async function loadChannelGroups() {
-  const sel = document.getElementById('groupFilter');
-  if (sel.options.length > 1) return;
-  try {
-    const res = await fetch('/api/channels/groups');
-    const groups = await res.json();
-    groups.forEach(g => {
-      const opt = document.createElement('option');
-      opt.value = g;
-      opt.textContent = '📂 ' + g;
-      sel.appendChild(opt);
-    });
-  } catch (e) {}
-}
-
-async function reloadM3uServer() {
-  try {
-    const res = await fetch('/api/channels/reload', { method: 'POST' });
-    const data = await res.json();
-    document.getElementById('badgeChannelsCount').textContent = data.count || 0;
-    document.getElementById('m3uStatusInfo').innerHTML = data.count > 0
-      ? `<strong style="color:#6ee7b7">✅ Lista recargada con ${data.count} canales.</strong>`
-      : `<strong style="color:#fda4af">⚠️ No se encontró lista.m3u o está vacía.</strong>`;
-    showToast(`Lista M3U actualizada (${data.count} canales)`, 'success');
-    const sel = document.getElementById('groupFilter');
-    sel.innerHTML = '<option value="">📂 Todas las categorías</option>';
-    await loadChannelGroups();
-    searchChannels();
-  } catch (e) {
-    showToast('Error al recargar lista M3U', 'error');
-  }
-}
-
-let lastChannelsData = [];
-async function searchChannels() {
-  const query = document.getElementById('searchInput').value.trim();
-  const group = document.getElementById('groupFilter').value;
-  const body  = document.getElementById('channelsBody');
-  const info  = document.getElementById('resultsInfo');
-
-  body.innerHTML = '<tr><td colspan="3" style="text-align:center;padding:30px">⏳ Buscando canales...</td></tr>';
-
-  try {
-    const params = new URLSearchParams({ q: query, group: group });
-    const res = await fetch('/api/channels?' + params.toString());
-    const data = await res.json();
-    lastChannelsData = data;
-    body.innerHTML = '';
-
-    if (data.length === 0) {
-      body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:34px">No se encontraron canales con ese criterio</td></tr>';
-      info.textContent = '0 resultados';
-      return;
-    }
-
-    info.textContent = `Mostrando ${data.length} canales`;
-    data.forEach((ch, idx) => {
-      const tr = document.createElement('tr');
-      const groupBadge = ch.group
-        ? `<span class="badge badge-scheduled">${escapeHtml(ch.group)}</span>`
-        : '<span style="color:var(--text-muted);font-size:12px;">General</span>';
-      tr.innerHTML = `
-        <td class="cell-main">
-          <div style="font-weight:600;color:#f8fafc;">${escapeHtml(ch.name)}</div>
-          <div style="font-size:11.5px;color:var(--text-muted);word-break:break-all;margin-top:2px;">${escapeHtml(ch.url)}</div>
-        </td>
-        <td data-label="Categoría">${groupBadge}</td>
-        <td class="cell-actions" style="text-align:right;white-space:nowrap;">
-          <button class="btn-success btn-sm" onclick="copyChannel(${idx})">📋 Copiar</button>
-          <button class="btn-primary btn-sm" onclick="recordChannel(${idx})">▶️ Grabar</button>
-          <button class="btn-warning btn-sm" onclick="scheduleChannel(${idx})">📅 Programar</button>
-        </td>
-      `;
-      body.appendChild(tr);
-    });
-  } catch (e) {
-    body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f43f5e;padding:30px">Error de conexión</td></tr>';
-  }
-}
-
-function copyChannel(idx) {
-  const ch = lastChannelsData[idx];
-  if (!ch) return;
-  copyToClipboard(ch.url, ch.name);
-}
-
-function recordChannel(idx) {
-  const ch = lastChannelsData[idx];
-  if (!ch) return;
-  document.getElementById('url').value = ch.url;
-  document.getElementById('filename').value = formatFilenameForChannel(ch.name);
-  showTab('record');
-  showToast(`Canal "${ch.name}" cargado en el grabador`, 'info');
-}
-
-function scheduleChannel(idx) {
-  const ch = lastChannelsData[idx];
-  if (!ch) return;
-  document.getElementById('sUrl').value = ch.url;
-  document.getElementById('sFilename').value = 'prog_' + formatFilenameForChannel(ch.name);
-  showTab('schedule');
-  showToast(`Canal "${ch.name}" listo para programar`, 'info');
-}
-
-function copyToClipboard(text, label = '') {
+function copyText(text, label) {
+  const done = () => toast(label ? `Enlace copiado: ${label}` : 'Enlace copiado', 'ok');
   if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text).then(() => {
-      showToast(`Enlace copiado${label ? ': ' + label : ''}`, 'success');
-    }).catch(err => {
-      showToast('Error al copiar: ' + err, 'error');
-    });
-  } else {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    try {
-      document.execCommand('copy');
-      showToast(`Enlace copiado${label ? ': ' + label : ''}`, 'success');
-    } catch (err) {
-      showToast('No se pudo copiar al portapapeles', 'error');
-    }
-    document.body.removeChild(textArea);
-  }
-}
-
-function formatFilenameForChannel(name) {
-  let safeName = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/gi, '_').toLowerCase();
-  safeName = safeName.replace(/_+/g, '_').replace(/^_|_$/g, '');
-  const now = new Date();
-  const tag = now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) + '_' + pad2(now.getHours()) + pad2(now.getMinutes());
-  return (safeName || 'canal') + '_' + tag;
-}
-
-function setDirectDuration(val) {
-  document.getElementById('duration').value = val;
-}
-
-function refreshDefaultFilename() {
-  const now = new Date();
-  const tag = now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) + '_' + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds());
-  document.getElementById('filename').value = 'grabacion_' + tag;
-}
-
-// ── Grabación Inmediata y Estado en Vivo ───────────────────────────
-let wasRunning = false;
-let lastLoggedVpnIp = '';
-
-async function submitForm() {
-  const fd = new FormData();
-  fd.append('url',         document.getElementById('url').value.trim());
-  fd.append('duration',    document.getElementById('duration').value.trim());
-  fd.append('filename',    document.getElementById('filename').value.trim());
-  fd.append('format',      document.getElementById('format').value);
-  fd.append('vpn_country', document.getElementById('rVpnCountry').value);
-  const res  = await fetch('/record', { method: 'POST', body: fd });
-  const data = await res.json();
-  if (data.error) {
-    log('❌ ' + data.error);
-    showToast(data.error, 'error');
+    navigator.clipboard.writeText(text).then(done, () => toast('No se pudo copiar', 'error'));
     return;
   }
-  log('▶️ ' + (data.message || 'Grabación iniciada'));
-  showToast(data.message || 'Grabación iniciada', 'success');
-  checkServerStatus();
-}
-document.getElementById('form').onsubmit = e => { e.preventDefault(); submitForm(); };
-
-async function stopRecord() {
-  const res  = await fetch('/stop', { method: 'POST' });
-  const data = await res.json();
-  log('⏹️ ' + (data.message || 'Detención solicitada'));
-  showToast(data.message || 'Deteniendo grabación...', 'info');
-  setTimeout(checkServerStatus, 800);
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('No se pudo copiar', 'error'); }
+  ta.remove();
 }
 
-async function checkServerStatus() {
-  try {
-    const res  = await fetch('/status');
-    const data = await res.json();
-    const banner = document.getElementById('statusBanner');
-    const dot    = document.getElementById('globalDot');
-    const gText  = document.getElementById('globalStateText');
-    const sIcon  = document.getElementById('statusIcon');
-    const sText  = document.getElementById('statusText');
-    const pCont  = document.getElementById('progressContainer');
-    const pBar   = document.getElementById('progressBar');
-    const timer  = document.getElementById('liveTimer');
-    const stopBtn = document.getElementById('globalStopBtn');
+// ════════════════════════════════════════════
+//  Logos y monogramas
+// ════════════════════════════════════════════
+const MONO_HUES = [215, 165, 22, 275, 340, 42, 190, 125, 250, 5];
+const SKIP_WORDS = /^(hd|sd|fhd|uhd|4k|the|la|el|los|las|de|del|tv)$/i;
 
-    // Actualizar Píldora VPN compacta en el Topbar y registrar IP en la consola inferior
-    if (data.vpn && data.vpn.enabled === false) {
-      // App sin Gluetun: ocultar todos los controles de VPN
-      document.getElementById('vpnPill').style.display = 'none';
-      ['rVpnCountry', 'sVpnCountry'].forEach(id => {
-        const group = document.getElementById(id)?.closest('.form-group');
-        if (group) group.style.display = 'none';
-      });
-    } else if (data.vpn) {
-      const vDot  = document.getElementById('vpnDot');
-      const vTxt  = document.getElementById('vpnStatusText');
-      const vPill = document.getElementById('vpnPill');
-      if (data.vpn.switching) {
-        vDot.className = 'dot switching';
-        vTxt.textContent = `⏳ ${data.vpn.configured_country || 'VPN'}...`;
-      } else if (data.vpn.public_ip) {
-        vDot.className = 'dot';
-        const cName = data.vpn.configured_country || data.vpn.ip_country || 'VPN';
-        vTxt.textContent = `🛡️ ${cName}`;
-        vPill.title = `VPN conectada en ${cName} · IP pública: ${data.vpn.public_ip}`;
-        if (data.vpn.public_ip !== lastLoggedVpnIp) {
-          lastLoggedVpnIp = data.vpn.public_ip;
-          log(`🛡️ VPN activa en ${cName} · IP pública: ${data.vpn.public_ip}`);
-        }
-      } else if (data.vpn.available) {
-        vDot.className = 'dot switching';
-        vTxt.textContent = `🛡️ ${data.vpn.configured_country || 'VPN'}`;
-      } else {
-        vDot.className = 'dot';
-        vTxt.textContent = '🛡️ VPN';
-      }
-    }
-
-    if (data.schedules_pending != null) {
-      document.getElementById('badgeSchedulesCount').textContent = data.schedules_pending;
-    }
-    if (data.history_count != null) {
-      document.getElementById('badgeHistoryCount').textContent = data.history_count;
-    }
-
-    sText.textContent = data.progress || 'Listo';
-
-    if (data.running) {
-      wasRunning = true;
-      banner.className = 'live-banner is-recording';
-      dot.className = 'dot recording';
-      gText.textContent = data.mode === 'scheduled' ? 'REC · Prog' : 'REC';
-      sIcon.textContent = '🔴';
-      pCont.style.display = 'block';
-      stopBtn.style.display = 'inline-flex';
-
-      if (data.start_time && data.duration_requested) {
-        const elapsedSec = Math.max(0, Math.round((Date.now() - new Date(data.start_time).getTime()) / 1000));
-        const totalSec   = Math.max(1, Number(data.duration_requested));
-        const pct        = Math.min(100, (elapsedSec / totalSec) * 100);
-        pBar.style.width = pct.toFixed(1) + '%';
-        timer.style.display = 'inline';
-        timer.textContent = `${secsToHHMMSS(elapsedSec)} / ${secsToHHMMSS(totalSec)} (${pct.toFixed(0)}%)`;
-      } else {
-        timer.style.display = 'none';
-      }
-    } else {
-      dot.className = 'dot';
-      gText.textContent = 'Listo';
-      pCont.style.display = 'none';
-      timer.style.display = 'none';
-      stopBtn.style.display = 'none';
-
-      if (data.last_result && data.last_result.status === 'ok') {
-        banner.className = 'live-banner is-success';
-        sIcon.textContent = '✅';
-      } else if (data.last_result && data.last_result.status === 'failed') {
-        banner.className = 'live-banner is-error';
-        sIcon.textContent = '❌';
-      } else {
-        banner.className = 'live-banner';
-        sIcon.textContent = '🟢';
-      }
-
-      if (wasRunning) {
-        wasRunning = false;
-        if (data.last_result) {
-          if (data.last_result.status === 'ok') {
-            log('✅ Finalizado: ' + (data.filename || ''));
-            showToast('Grabación finalizada correctamente', 'success');
-          } else if (data.last_result.status === 'stopped') {
-            log('⏹️ Detenida: ' + (data.filename || ''));
-          } else {
-            log('❌ Error: ' + (data.last_result.reason || ''));
-            showToast('La grabación terminó con errores', 'error');
-          }
-        }
-        if (data.filename) {
-          const dl = document.getElementById('download');
-          dl.href = '/download/' + encodeURIComponent(data.filename);
-          dl.innerHTML = `<span>⬇️ Descargar última grabación: <strong>${escapeHtml(data.filename)}</strong></span><span>Descargar archivo →</span>`;
-          dl.style.display = 'flex';
-        }
-        loadSchedules();
-        loadHistory();
-      }
-    }
-  } catch (e) {}
+function hueFor(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return MONO_HUES[h % MONO_HUES.length];
 }
 
-setInterval(checkServerStatus, 2000);
-checkServerStatus();
+function initials(name) {
+  const words = String(name || '?').replace(/[([].*?[)\]]/g, ' ').split(/[\s\-_.·|/]+/).filter(Boolean);
+  const useful = words.filter(w => !SKIP_WORDS.test(w));
+  // "Radio Jazz 101" -> RJ, pero "Ciencia TV" -> CT (si quitar palabras deja solo una, no se quitan)
+  const picked = (useful.length >= 2 ? useful : words).slice(0, 2);
+  return picked.map(w => /^\d+$/.test(w) ? w.slice(0, 2) : w[0]).join('').toUpperCase().slice(0, 3) || '?';
+}
 
-// ── Historial ──────────────────────────────────────────────────────
-async function loadHistory() {
-  const res  = await fetch('/history');
-  const data = await res.json();
-  const body = document.getElementById('historyBody');
-  body.innerHTML = '';
+function monoTile(name) {
+  return `<div class="logo-tile mono-tile" style="--h:${hueFor(name)}">${esc(initials(name))}</div>`;
+}
 
-  document.getElementById('badgeHistoryCount').textContent = data.length;
-  document.getElementById('statTotal').textContent = data.length;
-  document.getElementById('statOk').textContent = data.filter(x => x.status === 'ok' || x.status === 'stopped').length;
-  document.getElementById('statFailed').textContent = data.filter(x => x.status === 'failed').length;
-  const totalBytes = data.reduce((acc, x) => acc + (Number(x.filesize_bytes) || 0), 0);
-  document.getElementById('statSize').textContent = formatBytes(totalBytes);
+function logoTile(logoId, name) {
+  if (!logoId) return monoTile(name);
+  return `<div class="logo-tile"><img src="/logo/${encodeURIComponent(logoId)}" alt="" loading="lazy" decoding="async" data-logo data-name="${esc(name)}"></div>`;
+}
 
-  if (data.length === 0) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:34px">Aún no hay grabaciones registradas</td></tr>';
+// Logos o miniaturas que fallan al cargar: sustituirlos sin dejar el icono de imagen rota
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  if (img.hasAttribute('data-logo')) {
+    img.closest('.logo-tile').outerHTML = monoTile(img.dataset.name || '?');
+  } else if (img.hasAttribute('data-thumb')) {
+    const fallback = img.parentElement.querySelector('.thumb-fallback');
+    img.remove();
+    if (fallback) fallback.hidden = false;
+  }
+}, true);
+
+// ════════════════════════════════════════════
+//  Tema claro / oscuro
+// ════════════════════════════════════════════
+const THEMES = ['auto', 'light', 'dark'];
+const THEME_INFO = { auto: ['auto', 'Tema: automático'], light: ['sun', 'Tema: claro'], dark: ['moon', 'Tema: oscuro'] };
+
+function applyTheme(theme) {
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const btn = $('#themeBtn');
+  btn.innerHTML = icon(THEME_INFO[theme][0]);
+  btn.title = THEME_INFO[theme][1];
+  btn.dataset.theme = theme;
+}
+
+function currentTheme() {
+  try { return localStorage.getItem('theme') || 'auto'; } catch (e) { return 'auto'; }
+}
+
+$('#themeBtn').addEventListener('click', () => {
+  const next = THEMES[(THEMES.indexOf($('#themeBtn').dataset.theme || 'auto') + 1) % THEMES.length];
+  try { localStorage.setItem('theme', next); } catch (e) { /* sin almacenamiento: solo esta visita */ }
+  applyTheme(next);
+});
+applyTheme(currentTheme());
+
+// ════════════════════════════════════════════
+//  Navegación
+// ════════════════════════════════════════════
+const HASH_VIEWS = { '#canales': 'channels', '#grabaciones': 'recordings' };
+
+function showView(view) {
+  state.view = view;
+  $$('.view').forEach(v => { v.hidden = v.dataset.view !== view; });
+  $$('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.nav === view));
+  if (view === 'recordings') loadRecordings();
+  if (view === 'channels' && !state.channels.length) loadChannels();
+}
+
+window.addEventListener('hashchange', () => showView(HASH_VIEWS[location.hash] || 'channels'));
+
+// ════════════════════════════════════════════
+//  Estado del servidor y barra de grabación
+// ════════════════════════════════════════════
+async function refreshStatus() {
+  let data;
+  try { data = await api('/status'); } catch (e) { return; }
+  if (data.error) return;
+  const prev = state.status;
+  state.status = data;
+  renderVpn(data.vpn);
+  renderLiveBar(data);
+
+  const badge = $('#upcomingBadge');
+  badge.textContent = data.schedules_pending;
+  badge.hidden = !data.schedules_pending;
+
+  if (data.running) {
+    state.wasRunning = true;
+  } else if (state.wasRunning) {
+    state.wasRunning = false;
+    const r = data.last_result;
+    if (r && r.status === 'ok') toast('Grabación terminada', 'ok');
+    else if (r && r.status === 'stopped') toast('Grabación detenida', 'info');
+    else if (r) toast(`La grabación falló: ${r.reason || 'motivo desconocido'}`, 'error');
+    if (state.view === 'recordings') loadRecordings();
+  }
+  if (prev && state.view === 'recordings' &&
+      (prev.history_count !== data.history_count || prev.schedules_pending !== data.schedules_pending)) {
+    loadRecordings();
+  }
+}
+
+function renderLiveBar(s) {
+  const bar = $('#liveBar');
+  bar.hidden = !s.running;
+  if (!s.running) return;
+
+  const title = s.channel || stripExt(s.filename) || 'Grabación';
+  $('#liveTitle').textContent = `Grabando · ${title}`;
+  $('#liveThumb').innerHTML = logoTile(s.logo_id, title);
+
+  const progress = String(s.progress || '');
+  const phase = /^(\[Programada\] )?(Guardando|Preparando|Reconectando|🌍)/.test(progress)
+    ? progress.replace('[Programada] ', '') : '';
+  let pct = 0, timeText = '';
+  if (s.start_time && s.duration_requested) {
+    const elapsed = Math.max(0, (Date.now() - new Date(s.start_time).getTime()) / 1000);
+    const total = Math.max(1, Number(s.duration_requested));
+    pct = Math.min(100, (elapsed / total) * 100);
+    timeText = `${hms(elapsed)} / ${hms(total)}`;
+  }
+  const parts = [s.mode === 'scheduled' ? 'Programada' : 'En directo'];
+  if (phase) parts.push(phase); else if (timeText) parts.push(timeText);
+  if (s.vpn_country) parts.push(s.vpn_country);
+  $('#liveSub').textContent = parts.join(' · ');
+  $('#liveProgress').style.width = `${pct.toFixed(1)}%`;
+}
+
+$('#stopBtn').addEventListener('click', async () => {
+  const data = await postForm('/stop');
+  toast(data.message || 'Deteniendo…', 'info');
+  setTimeout(refreshStatus, 800);
+});
+
+// ════════════════════════════════════════════
+//  VPN
+// ════════════════════════════════════════════
+function fillCountrySelect(select, firstLabel) {
+  const data = state.vpnCountries || { featured: [], others: [] };
+  select.innerHTML = `<option value="">${esc(firstLabel)}</option>`;
+  const fav = document.createElement('optgroup');
+  fav.label = 'Frecuentes';
+  data.featured.forEach(c => fav.appendChild(new Option(c.label, c.value)));
+  select.appendChild(fav);
+  if (data.others.length) {
+    const all = document.createElement('optgroup');
+    all.label = 'Todos';
+    data.others.forEach(c => all.appendChild(new Option(c, c)));
+    select.appendChild(all);
+  }
+}
+
+async function loadVpnCountries() {
+  state.vpnCountries = await api('/api/vpn/countries');
+  fillCountrySelect($('#vpnGlobalSelect'), 'Elegir país…');
+  fillCountrySelect($('#fVpn'), 'El país actual de la VPN');
+}
+
+function renderVpn(vpn) {
+  const enabled = !!(vpn && vpn.enabled !== false);
+  $('#vpnBox').hidden = !enabled;
+  $('#vpnField').hidden = !enabled;
+  if (!enabled) return;
+  const country = vpn.configured_country || vpn.ip_country || 'VPN';
+  const dot = $('#vpnDot');
+  dot.className = 'dot' + (vpn.switching ? ' busy' : vpn.public_ip ? ' on' : '');
+  $('#vpnLabel').textContent = vpn.switching ? `${country}…` : country;
+  $('#vpnDetails').textContent = vpn.switching
+    ? `Conectando a ${country}…`
+    : vpn.public_ip
+      ? `Conectada · IP ${vpn.public_ip}${vpn.ip_city ? ` (${vpn.ip_city})` : ''}`
+      : vpn.available ? 'Gluetun responde, pero aún no hay conexión.' : 'No hay conexión con Gluetun.';
+}
+
+$('#vpnBtn').addEventListener('click', e => {
+  e.stopPropagation();
+  const pop = $('#vpnPopover');
+  pop.hidden = !pop.hidden;
+  $('#vpnBtn').setAttribute('aria-expanded', String(!pop.hidden));
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#vpnBox')) { $('#vpnPopover').hidden = true; $('#vpnBtn').setAttribute('aria-expanded', 'false'); }
+});
+
+$('#vpnGlobalSelect').addEventListener('change', async e => {
+  const country = e.target.value;
+  if (!country) return;
+  toast(`Cambiando la VPN a ${country}…`, 'info');
+  const data = await postForm('/api/vpn/country', { country });
+  if (data.error) toast(data.error, 'error');
+  else toast(data.message || `Conectada a ${country}`, 'ok');
+  e.target.value = '';
+  $('#vpnPopover').hidden = true;
+  refreshStatus();
+});
+
+// ════════════════════════════════════════════
+//  Canales
+// ════════════════════════════════════════════
+async function loadGroups() {
+  const groups = await api('/api/channels/groups');
+  const chips = ['<button type="button" class="chip active" data-group="">Todos</button>']
+    .concat((Array.isArray(groups) ? groups : []).map(g => `<button type="button" class="chip" data-group="${esc(g)}">${esc(g)}</button>`));
+  $('#groupChips').innerHTML = chips.join('');
+  $('#groupChips').hidden = !groups.length;
+}
+
+async function loadChannels() {
+  const params = new URLSearchParams({ q: state.query, group: state.group });
+  const data = await api('/api/channels?' + params);
+  state.channels = Array.isArray(data) ? data : [];
+  renderChannels();
+}
+
+function renderChannels() {
+  const grid = $('#channelGrid');
+  const list = state.channels;
+  const filtered = state.query || state.group;
+
+  if (!list.length) {
+    $('#channelsInfo').textContent = '';
+    grid.innerHTML = filtered
+      ? `<div class="empty">${icon('search')}<strong>Sin resultados</strong><span>Prueba con otro nombre o categoría.</span></div>`
+      : `<div class="empty">${icon('tv')}<strong>No hay lista de canales</strong>
+           <span>Coloca un archivo M3U en <code>${esc(M3U_FILE)}</code> (por ejemplo, una lista de iptv-org) y pulsa «Recargar lista», o graba pegando una URL.</span>
+           <button type="button" class="btn btn-primary" data-action="manual">${icon('link')}<span>Pegar URL</span></button></div>`;
     return;
   }
+  $('#channelsInfo').textContent = list.length >= 100 && !filtered
+    ? `Mostrando ${list.length} canales · usa el buscador para encontrar el resto`
+    : `${list.length} ${list.length === 1 ? 'canal' : 'canales'}`;
+  grid.innerHTML = list.map((ch, i) => `
+    <div class="channel" role="button" tabindex="0" data-channel="${i}" aria-label="Grabar ${esc(ch.name)}">
+      ${logoTile(ch.logo_id, ch.name)}
+      <span class="channel-name">${esc(ch.name)}</span>
+      ${ch.group ? `<span class="channel-group">${esc(ch.group)}</span>` : ''}
+      <button type="button" class="channel-copy" data-copy="${i}" title="Copiar enlace">${icon('copy')}</button>
+    </div>`).join('');
+}
 
-  data.slice().reverse().forEach(item => {
-    const tr = document.createElement('tr');
-    const typeBadge = item.type === 'scheduled'
-      ? '<span class="badge badge-scheduled">📅 Programada</span>'
-      : '<span class="badge badge-immediate">▶️ Directo</span>';
+let searchTimer = null;
+$('#channelSearch').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { state.query = e.target.value.trim(); loadChannels(); }, 250);
+});
 
-    let statusBadge = '';
-    if (item.status === 'ok') {
-      statusBadge = '<span class="badge badge-ok">✅ Completada</span>';
-    } else if (item.status === 'stopped') {
-      statusBadge = '<span class="badge badge-stopped">⏹️ Detenida</span>';
-    } else {
-      statusBadge = `<span class="badge badge-failed" title="${escapeHtml(item.status_reason)}">❌ Fallida</span>`;
-      if (item.status_reason) {
-        statusBadge += `<div style="font-size:11px;color:#fda4af;margin-top:3px;">${escapeHtml(item.status_reason)}</div>`;
-      }
+$('#groupChips').addEventListener('click', e => {
+  const chip = e.target.closest('[data-group]');
+  if (!chip) return;
+  state.group = chip.dataset.group;
+  $$('#groupChips .chip').forEach(c => c.classList.toggle('active', c === chip));
+  loadChannels();
+});
+
+$('#channelGrid').addEventListener('click', e => {
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    e.stopPropagation();
+    const ch = state.channels[+copy.dataset.copy];
+    if (ch) copyText(ch.url, ch.name);
+    return;
+  }
+  if (e.target.closest('[data-action="manual"]')) { openSheet(null); return; }
+  const card = e.target.closest('[data-channel]');
+  if (card) openSheet(state.channels[+card.dataset.channel]);
+});
+$('#channelGrid').addEventListener('keydown', e => {
+  const card = e.target.closest('[data-channel]');
+  if (card && (e.key === 'Enter' || e.key === ' ') && e.target === card) {
+    e.preventDefault();
+    openSheet(state.channels[+card.dataset.channel]);
+  }
+});
+
+$('#manualUrlBtn').addEventListener('click', () => openSheet(null));
+
+$('#reloadListBtn').addEventListener('click', async () => {
+  const data = await postForm('/api/channels/reload');
+  if (data.error) { toast(data.error, 'error'); return; }
+  toast(data.count ? `Lista recargada: ${data.count} canales` : 'No se encontró la lista o está vacía', data.count ? 'ok' : 'error');
+  state.group = '';
+  await loadGroups();
+  loadChannels();
+});
+
+// ════════════════════════════════════════════
+//  Fechas locales y cambio de hora
+// ════════════════════════════════════════════
+// Una hora local puede corresponder a 0 instantes (la hora que se salta en marzo)
+// o a 2 (la hora que se repite en octubre). Devuelve todos los instantes posibles.
+function localCandidates(localStr) {
+  if (!localStr || !localStr.includes('T')) return [];
+  const [d, t] = localStr.split('T');
+  const [Y, M, D] = d.split('-').map(Number);
+  const [h, m] = t.split(':').map(Number);
+  const base = new Date(Y, M - 1, D, h, m, 0, 0).getTime();
+  const found = [];
+  for (const delta of [-3600000, 0, 3600000]) {
+    const dt = new Date(base + delta);
+    if (dt.getFullYear() === Y && dt.getMonth() === M - 1 && dt.getDate() === D &&
+        dt.getHours() === h && dt.getMinutes() === m && !found.some(c => c.getTime() === dt.getTime())) {
+      found.push(dt);
     }
+  }
+  return found.sort((a, b) => a - b);
+}
 
-    const realDur = item.media_duration_seconds != null
-      ? secsToHHMMSS(item.media_duration_seconds)
-      : (item.duration_seconds != null ? secsToHHMMSS(item.duration_seconds) : '--:--:--');
+function isoWithOffset(dt) {
+  const off = -dt.getTimezoneOffset();
+  const sign = off >= 0 ? '+' : '-';
+  const p = n => pad2(Math.floor(Math.abs(n)));
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}T${p(dt.getHours())}:${p(dt.getMinutes())}:00` +
+    `${sign}${p(off / 60)}:${p(off % 60)}`;
+}
 
-    const hasFile = (Number(item.filesize_bytes) || 0) > 0;
-    const playBtn = hasFile
-      ? `<button class="btn-primary btn-sm" title="Ver grabación aquí" data-filename="${escapeHtml(item.filename)}" onclick="openVideoPlayer(this.dataset.filename)">▶️ Ver</button> `
-      : '';
-    const dlBtn = hasFile
-      ? `<a href="/download/${encodeURIComponent(item.filename)}" class="btn-success btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;" title="Descargar">⬇️</a> `
-      : '';
+const toLocalInput = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
-    const vpnTag = item.vpn_country
-      ? `<span class="badge-vpn">🌍 ${escapeHtml(item.vpn_country)}</span>`
-      : '';
+function resolveDate(which) {
+  const value = $(which === 'start' ? '#fStart' : '#fEnd').value;
+  const cands = localCandidates(value);
+  const ambiguous = cands.length > 1;
+  $(which === 'start' ? '#foldStart' : '#foldEnd').hidden = !ambiguous;
+  if (ambiguous) return { date: cands[state.sheet.folds[which] === 1 ? 1 : 0], ambiguous, cands };
+  return { date: cands[0] || new Date(value), ambiguous, cands };
+}
 
-    tr.innerHTML = `
-      <td class="cell-main">
-        <div style="font-weight:600;color:#f8fafc;">${escapeHtml(item.filename)}</div>
-        <div style="display:flex;gap:6px;align-items:center;margin-top:3px;">
-          <span style="font-size:11px;color:var(--text-muted);">${escapeHtml((item.format || '').toUpperCase())}</span>
-          ${vpnTag}
-        </div>
-      </td>
-      <td data-label="Modo">${typeBadge}</td>
-      <td data-label="Inicio" style="font-size:12.5px;">${new Date(item.start).toLocaleString('es-ES')}</td>
-      <td data-label="Dur. pedida" class="mono-input" style="font-size:12.5px;">${escapeHtml(item.duration_requested || '')}</td>
-      <td data-label="Dur. grabada" class="mono-input" style="font-size:12.5px;">${realDur}</td>
-      <td data-label="Tamaño" class="mono-input" style="font-size:12.5px;">${escapeHtml(item.filesize_human || '0 B')}</td>
-      <td data-label="Estado">${statusBadge}</td>
-      <td class="cell-actions" style="text-align:right;white-space:nowrap;">
-        ${playBtn}${dlBtn}
-        <button class="btn-danger btn-sm" title="Eliminar grabación" data-filename="${escapeHtml(item.filename)}" onclick="deleteRecording(this.dataset.filename)">🗑️</button>
-      </td>
-    `;
-    body.appendChild(tr);
+function setFold(which, val) {
+  state.sheet.folds[which] = val;
+  $$(`[data-fold^="${which}:"]`).forEach(c => c.classList.toggle('active', c.dataset.fold === `${which}:${val}`));
+}
+
+function updateScheduleSummary() {
+  const out = $('#scheduleSummary');
+  if (!$('#fStart').value || !$('#fEnd').value) {
+    out.className = 'summary';
+    out.textContent = 'Elige cuándo empieza y cuándo termina.';
+    return null;
+  }
+  const start = resolveDate('start');
+  let end = resolveDate('end');
+  // Fin en la hora repetida que quedaría antes del inicio: usar su segunda aparición
+  if (end.ambiguous && end.date <= start.date && end.cands[1] > start.date && state.sheet.folds.end === 0) {
+    setFold('end', 1);
+    end = resolveDate('end');
+  }
+  setFold('start', state.sheet.folds.start);
+  setFold('end', state.sheet.folds.end);
+
+  const secs = Math.round((end.date - start.date) / 1000);
+  if (!(secs > 0)) {
+    out.className = 'summary warn';
+    out.textContent = 'La hora de fin tiene que ser posterior a la de inicio.';
+    return null;
+  }
+  const dstChange = start.date.getTimezoneOffset() !== end.date.getTimezoneOffset();
+  const startsNow = start.date < new Date(Date.now() - 30000);
+  out.className = 'summary' + (dstChange ? ' warn' : '');
+  out.innerHTML = `Duración real <strong>${hms(secs)}</strong>` +
+    (dstChange ? ' · incluye el cambio de hora, ya está tenido en cuenta' : '') +
+    (startsNow ? ' · la hora de inicio ya pasó: empezará en cuanto la guardes' : '');
+  return { start: start.date, end: end.date };
+}
+
+// ════════════════════════════════════════════
+//  Panel para grabar o programar
+// ════════════════════════════════════════════
+function defaultName(channel) {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}h${pad2(d.getMinutes())}`;
+  return `${channel ? channel.name : 'Grabación'} ${stamp}`;
+}
+
+function openSheet(channel, mode = 'now') {
+  state.sheet = { channel, mode, duration: '01:00:00', folds: { start: 0, end: 0 } };
+  const manual = !channel;
+  $('#sheetLogo').outerHTML = manual
+    ? `<div class="logo-tile icon-tile" id="sheetLogo">${icon('link')}</div>`
+    : logoTile(channel.logo_id, channel.name).replace('class="logo-tile', 'id="sheetLogo" class="logo-tile');
+  $('#sheetTitle').textContent = manual ? 'Grabar un enlace' : channel.name;
+  $('#sheetSubtitle').textContent = manual ? 'M3U8, TS, RTMP, RTSP, UDP o SRT' : (channel.group || 'Canal de tu lista');
+  $('#urlField').hidden = !manual;
+  $('#sheetCopy').hidden = manual;
+  $('#fUrl').value = '';
+  $('#fName').value = defaultName(channel);
+  $('#fDuration').hidden = true;
+  $('#fDuration').value = '';
+  $$('#durationChips .chip').forEach(c => c.classList.toggle('active', c.dataset.dur === '01:00:00'));
+
+  const start = new Date(Date.now() + 5 * 60000);
+  $('#fStart').value = toLocalInput(start);
+  $('#fEnd').value = toLocalInput(new Date(start.getTime() + 3600000));
+  $('#sheetError').hidden = true;
+  updateOptionsSummary();
+  setMode(mode);
+  $('#sheetBackdrop').hidden = false;
+  document.body.style.overflow = 'hidden';
+  (manual ? $('#fUrl') : $('#sheetSubmit')).focus({ preventScroll: true });
+}
+
+function closeSheet() {
+  $('#sheetBackdrop').hidden = true;
+  document.body.style.overflow = '';
+  state.sheet = null;
+}
+
+function setMode(mode) {
+  state.sheet.mode = mode;
+  $$('.seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+    b.setAttribute('aria-selected', String(b.dataset.mode === mode));
   });
+  $('.mode-now').hidden = mode !== 'now';
+  $('.mode-schedule').hidden = mode !== 'schedule';
+  $('#sheetSubmit').textContent = mode === 'now' ? 'Empezar a grabar' : 'Programar grabación';
+  if (mode === 'schedule') updateScheduleSummary();
+  showSheetError(mode === 'now' && state.status && state.status.running
+    ? 'Ya hay una grabación en curso: la nueva no podrá empezar hasta que termine.' : '');
 }
 
-async function deleteRecording(filename) {
-  if (!confirm(`¿Eliminar el archivo "${filename}" y su entrada del historial?`)) return;
-  const res  = await fetch('/history/delete/' + encodeURIComponent(filename), { method: 'POST' });
-  const data = await res.json();
-  showToast(data.message || 'Grabación eliminada', 'info');
-  loadHistory();
+function showSheetError(msg) {
+  $('#sheetError').textContent = msg;
+  $('#sheetError').hidden = !msg;
 }
 
-async function clearHistory() {
-  if (!confirm('¿Vaciar el registro del historial?')) return;
-  const res  = await fetch('/history/clear', { method: 'POST' });
-  const data = await res.json();
-  showToast(data.message || 'Historial vaciado', 'info');
-  loadHistory();
+function updateOptionsSummary() {
+  const fmt = $('#fFormat').value.toUpperCase();
+  const vpnOn = !$('#vpnField').hidden;
+  const country = $('#fVpn').value;
+  $('#optionsSummary').textContent = `Opciones · ${fmt}` + (vpnOn ? ` · ${country ? `VPN en ${country}` : 'VPN actual'}` : '');
 }
 
-// ── Programador ────────────────────────────────────────────────────
-function initScheduleDefaults() {
-  const now   = new Date();
-  const start = new Date(now.getTime() + 5 * 60 * 1000);
-  const end   = new Date(start.getTime() + 60 * 60 * 1000);
+function parseDuration(text) {
+  text = text.trim();
+  if (/^\d+$/.test(text)) return hms(Number(text) * 60);         // "90" = 90 minutos
+  const m = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const secs = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] || 0);
+  return secs > 0 ? hms(secs) : null;
+}
 
-  if (!document.getElementById('sStart').value) document.getElementById('sStart').value = fmtDatetimeLocal(start);
-  if (!document.getElementById('sEnd').value)   document.getElementById('sEnd').value   = fmtDatetimeLocal(end);
-  if (!document.getElementById('sFilename').value) {
-    const tag = start.getFullYear() + pad2(start.getMonth() + 1) + pad2(start.getDate()) +
-      '_' + pad2(start.getHours()) + pad2(start.getMinutes());
-    document.getElementById('sFilename').value = 'prog_' + tag;
+$('#sheetBackdrop').addEventListener('click', e => { if (e.target === e.currentTarget) closeSheet(); });
+$('#recordSheet').addEventListener('click', e => {
+  const t = e.target;
+  if (t.closest('[data-close-sheet]')) { closeSheet(); return; }
+  if (t.closest('#sheetCopy') && state.sheet.channel) { copyText(state.sheet.channel.url, state.sheet.channel.name); return; }
+  const modeBtn = t.closest('[data-mode]');
+  if (modeBtn) { setMode(modeBtn.dataset.mode); return; }
+
+  const dur = t.closest('[data-dur]');
+  if (dur) {
+    $$('#durationChips .chip').forEach(c => c.classList.toggle('active', c === dur));
+    const custom = dur.dataset.dur === 'custom';
+    $('#fDuration').hidden = !custom;
+    if (custom) { $('#fDuration').value = state.sheet.duration; $('#fDuration').focus(); }
+    else state.sheet.duration = dur.dataset.dur;
+    return;
   }
-  onScheduleDatesChanged();
-}
+  const startIn = t.closest('[data-start-in]');
+  if (startIn) {
+    const prevLen = updateScheduleSummary();
+    const length = prevLen ? prevLen.end - prevLen.start : 3600000;
+    const start = new Date(Date.now() + Number(startIn.dataset.startIn) * 60000);
+    $('#fStart').value = toLocalInput(start);
+    $('#fEnd').value = toLocalInput(new Date(start.getTime() + length));
+    state.sheet.folds = { start: 0, end: 0 };
+    updateScheduleSummary();
+    return;
+  }
+  const len = t.closest('[data-length]');
+  if (len) {
+    const start = resolveDate('start').date;
+    if (isNaN(start)) return;
+    const end = new Date(start.getTime() + Number(len.dataset.length) * 60000);
+    $('#fEnd').value = toLocalInput(end);
+    const cands = localCandidates($('#fEnd').value);
+    state.sheet.folds.end = cands.length > 1 && Math.abs(cands[1] - end) < Math.abs(cands[0] - end) ? 1 : 0;
+    updateScheduleSummary();
+    return;
+  }
+  const fold = t.closest('[data-fold]');
+  if (fold) {
+    const [which, val] = fold.dataset.fold.split(':');
+    setFold(which, Number(val));
+    updateScheduleSummary();
+  }
+});
+['#fStart', '#fEnd'].forEach(sel => $(sel).addEventListener('input', updateScheduleSummary));
+['#fFormat', '#fVpn'].forEach(sel => $(sel).addEventListener('change', updateOptionsSummary));
 
-document.getElementById('scheduleForm').onsubmit = async e => {
+const URL_RE = /^(https?|rtmps?|rtsps?|udp|rtp|srt|mmsh?):\/\/\S+$/i;
+
+$('#recordSheet').addEventListener('submit', async e => {
   e.preventDefault();
-  const sStart = document.getElementById('sStart').value;
-  const sEnd   = document.getElementById('sEnd').value;
-  if (!sStart || !sEnd) { showToast('Completa las fechas de inicio y fin', 'error'); return; }
+  const sh = state.sheet;
+  const url = sh.channel ? sh.channel.url : $('#fUrl').value.trim();
+  if (!URL_RE.test(url)) { showSheetError('Pega un enlace válido (http, https, rtmp, rtsp, udp o srt).'); $('#fUrl').focus(); return; }
+  const name = $('#fName').value.trim();
+  if (!name) { showSheetError('Ponle un nombre a la grabación.'); $('#fName').focus(); return; }
+  const common = { url, filename: name, format: $('#fFormat').value, vpn_country: $('#fVpn').value };
+  const btn = $('#sheetSubmit');
 
-  const startRes = resolveInputDate(sStart, 'start');
-  const endRes   = resolveInputDate(sEnd, 'end');
+  let data;
+  btn.disabled = true;
+  try {
+    if (sh.mode === 'now') {
+      const duration = $('#fDuration').hidden ? sh.duration : parseDuration($('#fDuration').value);
+      if (!duration) { showSheetError('Escribe la duración como HH:MM:SS o en minutos.'); $('#fDuration').focus(); return; }
+      data = await postForm('/record', { ...common, duration });
+    } else {
+      const range = updateScheduleSummary();
+      if (!range) { showSheetError('Revisa las horas de inicio y fin.'); return; }
+      data = await postForm('/schedule', {
+        ...common, start: isoWithOffset(range.start), end: isoWithOffset(range.end),
+        start_fold: sh.folds.start, end_fold: sh.folds.end,
+      });
+    }
+  } finally {
+    btn.disabled = false;
+  }
+  if (data.error) { showSheetError(data.error); return; }
+  toast(data.message || 'Hecho', 'ok');
+  closeSheet();
+  refreshStatus();
+  if (state.view === 'recordings') loadRecordings();
+});
 
-  if (endRes.date <= startRes.date) {
-    showToast('La hora de fin debe ser posterior a la de inicio', 'error');
+// ════════════════════════════════════════════
+//  Grabaciones: próximas, biblioteca y anteriores
+// ════════════════════════════════════════════
+async function loadRecordings() {
+  const [history, schedules] = await Promise.all([api('/history'), api('/schedules')]);
+  state.history = Array.isArray(history) ? history : [];
+  state.schedules = Array.isArray(schedules) ? schedules : [];
+  renderUpcoming();
+  renderLibrary();
+  renderPast();
+}
+
+const jobTitle = j => j.channel || stripExt(j.filename);
+
+function renderUpcoming() {
+  const jobs = state.schedules.filter(j => j.status === 'pending' || j.status === 'running')
+    .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+  $('#upcomingSection').hidden = !jobs.length;
+  $('#upcomingList').innerHTML = jobs.map(j => {
+    const start = new Date(j.start_time), end = new Date(j.end_time);
+    const running = j.status === 'running';
+    return `
+      <div class="row">
+        ${logoTile(j.logo_id, jobTitle(j))}
+        <div class="row-main">
+          <p class="row-title">${esc(jobTitle(j))}</p>
+          <p class="row-sub"><span>${esc(fmtDay(start))} · ${esc(fmtTime(start))}–${esc(fmtTime(end))}</span>
+            ${j.vpn_country ? `<span>${icon('shield', 'tiny')} ${esc(j.vpn_country)}</span>` : ''}
+            <span>${esc((j.format || '').toUpperCase())}</span></p>
+        </div>
+        <div class="row-side">
+          ${running
+            ? '<span class="tag tag-rec">Grabando</span>'
+            : `<span class="countdown" data-countdown="${esc(j.start_time)}">${esc(countdownText(start))}</span>`}
+          ${running
+            ? `<button type="button" class="btn btn-sm" data-action="stop">${icon('stop')}<span>Detener</span></button>`
+            : `<button type="button" class="btn btn-sm btn-ghost" data-cancel="${esc(j.id)}">Cancelar</button>`}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderLibrary() {
+  const items = state.history.slice().reverse();
+  const total = items.reduce((acc, x) => acc + (Number(x.filesize_bytes) || 0), 0);
+  $('#librarySummary').textContent = items.length
+    ? `${items.length} ${items.length === 1 ? 'grabación' : 'grabaciones'} · ${formatBytes(total)}` : '';
+
+  if (!items.length) {
+    $('#libraryGrid').innerHTML = `<div class="empty">${icon('film')}<strong>Todavía no hay grabaciones</strong>
+      <span>Elige un canal para grabarlo ahora o programarlo.</span>
+      <a class="btn btn-primary" href="#canales">${icon('tv')}<span>Ver canales</span></a></div>`;
     return;
   }
-  if (startRes.date < new Date(Date.now() - 30000)) {
-    if (!confirm('⚠️ La hora de inicio ya ha pasado (comenzará inmediatamente). ¿Programar de todos modos?')) return;
-  }
 
-  const fd = new FormData();
-  fd.append('url',         document.getElementById('sUrl').value.trim());
-  fd.append('start',       toIsoWithOffset(startRes.date));
-  fd.append('end',         toIsoWithOffset(endRes.date));
-  fd.append('start_fold',  scheduleFolds.start);
-  fd.append('end_fold',    scheduleFolds.end);
-  fd.append('filename',    document.getElementById('sFilename').value.trim());
-  fd.append('format',      document.getElementById('sFormat').value);
-  fd.append('vpn_country', document.getElementById('sVpnCountry').value);
+  $('#libraryGrid').innerHTML = items.map(item => {
+    const file = item.filename;
+    const hasFile = (Number(item.filesize_bytes) || 0) > 0;
+    const title = stripExt(file);
+    const dur = item.media_duration_seconds ?? item.duration_seconds;
+    const when = item.start ? new Date(item.start) : null;
+    const meta = [when ? `${fmtDay(when)}, ${fmtTime(when)}` : '', hasFile ? formatBytes(item.filesize_bytes) : '',
+      (item.format || '').toUpperCase(), item.vpn_country || ''].filter(Boolean).join(' · ');
+    let status = '';
+    if (item.status === 'failed') {
+      status = `<div class="card-status"><span class="tag ${hasFile ? 'tag-warn' : 'tag-rec'}">${hasFile ? 'Incompleta' : 'Fallida'}</span>` +
+        (item.status_reason ? `<span class="card-reason">${esc(item.status_reason)}</span>` : '') + '</div>';
+    } else if (item.status === 'stopped') {
+      status = '<div class="card-status"><span class="tag">Detenida antes de tiempo</span></div>';
+    }
+    const fallback = `<div class="thumb-fallback" ${hasFile ? 'hidden' : ''}>${
+      item.channel ? logoTile(item.logo_id, item.channel) : `<div class="logo-tile icon-tile">${icon(hasFile ? 'film' : 'alert')}</div>`}</div>`;
+    const thumbInner = `
+      ${hasFile ? `<img src="/thumb/${encodeURIComponent(file)}" alt="" loading="lazy" decoding="async" data-thumb>` : ''}
+      ${fallback}
+      ${hasFile ? `<span class="play-hint">${icon('play')}</span>` : ''}
+      ${item.logo_id && hasFile ? `<div class="thumb-logo">${logoTile(item.logo_id, item.channel || title)}</div>` : ''}
+      ${hasFile && dur ? `<span class="thumb-badge">${shortDuration(dur)}</span>` : ''}`;
+    return `
+      <article class="card">
+        ${hasFile
+          ? `<button type="button" class="thumb" data-play="${esc(file)}" aria-label="Ver ${esc(title)}">${thumbInner}</button>`
+          : `<div class="thumb">${thumbInner}</div>`}
+        <div class="card-body">
+          <div class="card-text">
+            <p class="card-title" title="${esc(file)}">${esc(title)}</p>
+            <p class="card-meta">${esc(meta)}</p>
+            ${status}
+          </div>
+          <div class="card-actions">
+            ${hasFile ? `<a class="btn btn-icon btn-ghost" href="/download/${encodeURIComponent(file)}" title="Descargar">${icon('download')}</a>` : ''}
+            <button type="button" class="btn btn-icon btn-ghost" data-delete="${esc(file)}" title="Eliminar">${icon('trash')}</button>
+          </div>
+        </div>
+      </article>`;
+  }).join('');
+}
 
-  const res  = await fetch('/schedule', { method: 'POST', body: fd });
-  const data = await res.json();
-  if (data.error) {
-    showToast(data.error, 'error');
-    return;
-  }
-  showToast(data.message || 'Grabación programada con éxito', 'success');
-  document.getElementById('sStart').value = '';
-  document.getElementById('sEnd').value = '';
-  document.getElementById('sFilename').value = '';
-  document.getElementById('sVpnCountry').value = '';
-  scheduleFolds = { start: 0, end: 0 };
-  initScheduleDefaults();
-  loadSchedules();
+const STATUS_TAGS = {
+  ok: ['Completada', ''], stopped: ['Detenida', ''], failed: ['Fallida', 'tag-rec'], cancelled: ['Cancelada', ''],
 };
 
-function formatDateTimeWithTz(isoStr) {
-  const dt = new Date(isoStr);
-  const str = dt.toLocaleString('es-ES', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-  });
-  const m = String(isoStr).match(/([+-]\d{2}:\d{2})$/);
-  const tzTag = m ? ` <span class="badge-tz">UTC${m[1].replace(':00', '')}</span>` : '';
-  return str + tzTag;
+function renderPast() {
+  const jobs = state.schedules.filter(j => j.status !== 'pending' && j.status !== 'running').reverse();
+  $('#pastSection').hidden = !jobs.length && !state.history.length;
+  $('#pastCount').textContent = jobs.length ? `(${jobs.length})` : '';
+  $('#pastList').hidden = !jobs.length;
+  $('#clearPastBtn').hidden = !jobs.length;
+  $('#pastList').innerHTML = jobs.map(j => {
+    const start = new Date(j.start_time), end = new Date(j.end_time);
+    const [label, cls] = STATUS_TAGS[j.status] || [j.status, ''];
+    return `
+      <div class="row">
+        ${logoTile(j.logo_id, jobTitle(j))}
+        <div class="row-main">
+          <p class="row-title">${esc(jobTitle(j))}</p>
+          <p class="row-sub"><span>${esc(fmtDay(start))} · ${esc(fmtTime(start))}–${esc(fmtTime(end))}</span>
+            ${j.status === 'failed' && j.status_reason ? `<span>${esc(j.status_reason)}</span>` : ''}</p>
+        </div>
+        <div class="row-side">
+          <span class="tag ${cls}">${esc(label)}</span>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" data-delete-job="${esc(j.id)}" title="Quitar de la lista">${icon('x')}</button>
+        </div>
+      </div>`;
+  }).join('');
 }
 
-async function loadSchedules() {
-  const res  = await fetch('/schedules');
-  const data = await res.json();
-  const body = document.getElementById('scheduleBody');
-  body.innerHTML = '';
+$('#view-recordings').addEventListener('click', async e => {
+  const t = e.target;
+  const play = t.closest('[data-play]');
+  if (play) { openPlayer(play.dataset.play); return; }
 
-  const pendingCount = data.filter(j => j.status === 'pending' || j.status === 'running').length;
-  document.getElementById('badgeSchedulesCount').textContent = pendingCount;
+  if (t.closest('[data-action="stop"]')) { $('#stopBtn').click(); return; }
 
-  if (data.length === 0) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:34px">No hay grabaciones programadas</td></tr>';
+  const del = t.closest('[data-delete]');
+  if (del) {
+    const file = del.dataset.delete;
+    if (!confirm(`¿Eliminar «${file}»? Se borra el archivo y no se puede deshacer.`)) return;
+    const data = await postForm('/history/delete/' + encodeURIComponent(file));
+    toast(data.error || 'Grabación eliminada', data.error ? 'error' : 'ok');
+    loadRecordings();
     return;
   }
+  const cancel = t.closest('[data-cancel]');
+  if (cancel) {
+    if (!confirm('¿Cancelar esta grabación programada?')) return;
+    const data = await postForm('/schedules/cancel/' + encodeURIComponent(cancel.dataset.cancel));
+    toast(data.error || 'Programación cancelada', data.error ? 'error' : 'info');
+    loadRecordings();
+    refreshStatus();
+    return;
+  }
+  const delJob = t.closest('[data-delete-job]');
+  if (delJob) {
+    await postForm('/schedules/delete/' + encodeURIComponent(delJob.dataset.deleteJob));
+    loadRecordings();
+  }
+});
 
-  data.slice().reverse().forEach(job => {
-    const tr = document.createElement('tr');
-    const startDt = new Date(job.start_time);
-    const endDt   = new Date(job.end_time);
-    const durSecs = Math.max(0, Math.round((endDt.getTime() - startDt.getTime()) / 1000));
+$('#clearPastBtn').addEventListener('click', async () => {
+  if (!confirm('¿Quitar de la lista las programaciones terminadas o canceladas? Las grabaciones no se borran.')) return;
+  await postForm('/schedules/clear');
+  loadRecordings();
+});
 
-    const badge = {
-      pending:   '<span class="badge badge-pending">🕐 Pendiente</span>',
-      running:   '<span class="badge badge-running">🔴 Grabando</span>',
-      ok:        '<span class="badge badge-ok">✅ Completada</span>',
-      stopped:   '<span class="badge badge-stopped">⏹️ Detenida</span>',
-      failed:    '<span class="badge badge-failed">❌ Fallida</span>',
-      cancelled: '<span class="badge badge-cancelled">🚫 Cancelada</span>',
-    }[job.status] || `<span class="badge">${escapeHtml(job.status)}</span>`;
-
-    let actions = '';
-    if (job.status === 'pending') {
-      actions += `<button class="btn-warning btn-sm" title="Cancelar programación" onclick="cancelSchedule('${job.id}')">🚫 Cancelar</button> `;
-    } else if (job.status === 'running') {
-      actions += `<button class="btn-danger btn-sm" title="Detener grabación en curso" onclick="stopRecord()">⏹️ Detener</button> `;
-    } else {
-      if (job.status === 'ok' || job.status === 'stopped') {
-        actions += `<button class="btn-primary btn-sm" title="Ver grabación" data-filename="${escapeHtml(job.filename)}" onclick="openVideoPlayer(this.dataset.filename)">▶️ Ver</button> `;
-        actions += `<a href="/download/${encodeURIComponent(job.filename)}" class="btn-success btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;" title="Descargar">⬇️</a> `;
-      }
-      actions += `<button class="btn-danger btn-sm" title="Borrar registro" onclick="deleteSchedule('${job.id}')">🗑️</button>`;
-    }
-
-    let infoCell = '';
-    if (job.status === 'pending') {
-      infoCell = `<span class="countdown" data-start="${escapeHtml(job.start_time)}">...</span>`;
-    } else if (job.status === 'running') {
-      infoCell = `<span class="countdown" style="color:#6ee7b7;" data-end="${escapeHtml(job.end_time)}">En curso...</span>`;
-    } else if (job.status === 'ok' || job.status === 'stopped') {
-      infoCell = `<span style="color:#a7f3d0;font-size:12px;">${escapeHtml(job.filesize_human || 'Finalizada')}</span>`;
-    } else if (job.status === 'failed' && job.status_reason) {
-      infoCell = `<span style="color:#fda4af;font-size:12px;">${escapeHtml(job.status_reason)}</span>`;
-    }
-
-    const vpnTag = job.vpn_country
-      ? `<div style="margin-top:3px;"><span class="badge-vpn">🌍 VPN: ${escapeHtml(job.vpn_country)}</span></div>`
-      : `<div style="margin-top:3px;font-size:11px;color:var(--text-muted);">🛡️ VPN actual</div>`;
-
-    tr.innerHTML = `
-      <td class="cell-main">
-        <strong>${escapeHtml(job.filename)}</strong>
-        ${vpnTag}
-      </td>
-      <td data-label="Inicio" style="font-size:12.5px;">${formatDateTimeWithTz(job.start_time)}</td>
-      <td data-label="Fin" style="font-size:12.5px;">${formatDateTimeWithTz(job.end_time)}</td>
-      <td data-label="Duración" class="mono-input" style="font-size:12.5px;">${secsToHHMMSS(durSecs)}</td>
-      <td data-label="Formato"><span class="badge-tz">${escapeHtml((job.format || '').toUpperCase())}</span></td>
-      <td data-label="Estado">${badge}</td>
-      <td data-label="Detalle">${infoCell}</td>
-      <td class="cell-actions" style="white-space:nowrap;text-align:right;">${actions}</td>
-    `;
-    body.appendChild(tr);
-  });
-  updateCountdowns();
-}
+$('#clearHistoryBtn').addEventListener('click', async () => {
+  if (!confirm('¿Vaciar el historial? Los archivos de vídeo no se borran, pero dejarán de aparecer en la biblioteca.')) return;
+  await postForm('/history/clear');
+  toast('Historial vaciado', 'info');
+  loadRecordings();
+});
 
 function updateCountdowns() {
-  const now = Date.now();
-  document.querySelectorAll('.countdown[data-start]').forEach(el => {
-    const diff = Math.round((new Date(el.dataset.start).getTime() - now) / 1000);
-    el.textContent = diff > 0 ? '⏳ En ' + secsToHHMMSS(diff) : '🔜 Iniciando...';
-  });
-  document.querySelectorAll('.countdown[data-end]').forEach(el => {
-    const diff = Math.round((new Date(el.dataset.end).getTime() - now) / 1000);
-    el.textContent = diff > 0 ? '⏺ Restan ' + secsToHHMMSS(diff) : '🏁 Finalizando...';
-  });
-}
-setInterval(updateCountdowns, 1000);
-
-setInterval(() => {
-  if (document.getElementById('scheduleView').style.display !== 'none') loadSchedules();
-}, 6000);
-
-async function cancelSchedule(id) {
-  if (!confirm('¿Cancelar esta grabación programada?')) return;
-  await fetch('/schedules/cancel/' + id, { method: 'POST' });
-  showToast('Programación cancelada', 'info');
-  loadSchedules();
+  $$('[data-countdown]').forEach(el => { el.textContent = countdownText(new Date(el.dataset.countdown)); });
 }
 
-async function deleteSchedule(id) {
-  await fetch('/schedules/delete/' + id, { method: 'POST' });
-  showToast('Registro eliminado', 'info');
-  loadSchedules();
-}
+// ════════════════════════════════════════════
+//  Reproductor
+// ════════════════════════════════════════════
+const video = $('#proVideo');
+const player = { open: false, file: '', duration: 0, tracks: [], track: 0, pipe: false, offset: 0, shareUrl: '', idleTimer: null };
 
-async function clearSchedules() {
-  if (!confirm('¿Limpiar de la lista todas las programaciones ya finalizadas/canceladas?')) return;
-  await fetch('/schedules/clear', { method: 'POST' });
-  showToast('Programaciones antiguas limpiadas', 'info');
-  loadSchedules();
-}
+async function openPlayer(file) {
+  Object.assign(player, { open: true, file, duration: 0, tracks: [], track: 0, pipe: false, offset: 0 });
+  $('#playerTitle').textContent = stripExt(file);
+  $('#playerCodec').hidden = true;
+  player.shareUrl = `${location.origin}/stream/${encodeURIComponent(file)}`;
+  $('#playerVlc').href = 'vlc://' + player.shareUrl;
+  $('#playerDownload').href = '/download/' + encodeURIComponent(file);
+  $('#playerBackdrop').hidden = false;
+  document.body.style.overflow = 'hidden';
 
-// ── Reproductor de Vídeo Modal "Modo Cine" + Multipista de Audio ───
-let pState = {
-  open: false,
-  filename: '',
-  duration: 0,
-  audioTracks: [],
-  activeTrackIdx: 0,
-  isPipeMode: false,
-  pipeStartOffset: 0,
-  hideTimer: null
-};
-
-const proVideo = document.getElementById('proVideo');
-
-async function openVideoPlayer(filename) {
-  pState.open = true;
-  pState.filename = filename;
-  pState.duration = 0;
-  pState.audioTracks = [];
-  pState.activeTrackIdx = 0;
-  pState.isPipeMode = filename.toLowerCase().endsWith('.ts');
-  pState.pipeStartOffset = 0;
-
-  document.getElementById('playerModalTitle').textContent = filename;
-  document.getElementById('playerCodecBadge').style.display = 'none';
-  document.getElementById('playerModalBackdrop').classList.add('open');
-
-  pState.shareUrl = window.location.origin + '/stream/' + encodeURIComponent(filename);
-  document.getElementById('playerVlcBtn').href = 'vlc://' + pState.shareUrl;
-  document.getElementById('playerDownloadBtn').href = '/download/' + encodeURIComponent(filename);
-
-  // Consultar metadatos y pistas de audio reales con ffprobe
   try {
-    const res = await fetch('/api/media-info/' + encodeURIComponent(filename));
-    const info = await res.json();
-    pState.duration = Number(info.duration) || 0;
-    pState.audioTracks = info.audio_tracks || [];
-    // Con autenticación activa, VLC u otros reproductores necesitan un enlace firmado
-    if (info.sig) {
-      pState.shareUrl += '?sig=' + encodeURIComponent(info.sig);
-      document.getElementById('playerVlcBtn').href = 'vlc://' + pState.shareUrl;
+    const info = await api('/api/media-info/' + encodeURIComponent(file));
+    player.duration = Number(info.duration) || 0;
+    player.tracks = info.audio_tracks || [];
+    if (info.sig) {   // con login activo, VLC necesita un enlace firmado
+      player.shareUrl += '?sig=' + encodeURIComponent(info.sig);
+      $('#playerVlc').href = 'vlc://' + player.shareUrl;
     }
-
-    const badge = document.getElementById('playerCodecBadge');
     const parts = [];
     if (info.video_codec) parts.push(info.video_codec.toUpperCase());
-    if (pState.audioTracks.length > 0) parts.push(`${pState.audioTracks.length} audio${pState.audioTracks.length > 1 ? 's' : ''}`);
-    if (parts.length > 0) {
-      badge.textContent = parts.join(' · ');
-      badge.style.display = 'inline-block';
-    }
+    if (player.tracks.length > 1) parts.push(`${player.tracks.length} pistas de audio`);
+    if (parts.length) { $('#playerCodec').textContent = parts.join(' · '); $('#playerCodec').hidden = false; }
   } catch (e) {
-    pState.audioTracks = [{ index: 0, label: 'Pista 1 · Principal' }];
+    player.tracks = [];
   }
-
-  renderAudioTracksMenu();
-  loadPlayerSource(0, 0);
+  renderAudioMenu();
+  loadSource(0, 0);
 }
 
-function renderAudioTracksMenu() {
-  const container = document.getElementById('vAudioMenuItems');
-  const btnText   = document.getElementById('vAudioBtnText');
-  container.innerHTML = '';
-
-  const tracks = pState.audioTracks.length > 0
-    ? pState.audioTracks
-    : [{ index: 0, label: 'Pista 1 · Principal' }];
-
-  btnText.textContent = tracks.length > 1
-    ? `Pista ${pState.activeTrackIdx + 1} (${tracks.length})`
-    : 'Pista 1';
-
-  tracks.forEach((tr, i) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'v-menu-item' + (i === pState.activeTrackIdx ? ' active' : '');
-    btn.innerHTML = `<span>${escapeHtml(tr.label)}</span><span>${i === pState.activeTrackIdx ? '✓' : ''}</span>`;
-    btn.onclick = () => selectAudioTrack(i);
-    container.appendChild(btn);
-  });
+function renderAudioMenu() {
+  const tracks = player.tracks.length ? player.tracks : [{ label: 'Pista 1 · Principal' }];
+  $('#vAudioLabel').textContent = String(player.track + 1);
+  $('#vAudioBtn').hidden = tracks.length < 2;
+  $('#vAudioMenu').innerHTML = tracks.map((t, i) =>
+    `<button type="button" class="v-menu-item ${i === player.track ? 'active' : ''}" data-track="${i}">${esc(t.label)}</button>`).join('');
 }
 
-function loadPlayerSource(trackIdx, seekSeconds = 0) {
-  pState.activeTrackIdx = trackIdx;
-  const isTs = pState.filename.toLowerCase().endsWith('.ts');
-  const modeInfo = document.getElementById('playerModeInfo');
-
-  // Si es la Pista 1 (índice 0) y no es .ts, usamos lectura directa de disco (HTTP Range 206)
-  // Si el usuario selecciona Pista 2, 3... (o archivo .ts), usamos tubería en memoria (-c copy pipe:1, 0 bytes en disco)
-  if (trackIdx === 0 && !isTs) {
-    pState.isPipeMode = false;
-    pState.pipeStartOffset = 0;
-    proVideo.src = '/stream/' + encodeURIComponent(pState.filename);
-    proVideo.currentTime = Math.max(0, seekSeconds);
-    modeInfo.textContent = '⚡ Streaming directo desde disco (0% CPU · 0 bytes extra)';
+// Pista 1 de un MP4/MKV: lectura directa del archivo (permite saltar sin coste).
+// Otras pistas o archivos .ts: el servidor los prepara al vuelo sin recodificar.
+function loadSource(track, seek = 0) {
+  player.track = track;
+  const isTs = player.file.toLowerCase().endsWith('.ts');
+  if (track === 0 && !isTs) {
+    player.pipe = false;
+    player.offset = 0;
+    video.src = '/stream/' + encodeURIComponent(player.file);
+    video.currentTime = Math.max(0, seek);
+    $('#playerMode').textContent = '';
   } else {
-    pState.isPipeMode = true;
-    pState.pipeStartOffset = Math.max(0, seekSeconds);
-    const params = new URLSearchParams({
-      track: String(trackIdx),
-      start: String(Math.floor(pState.pipeStartOffset))
-    });
-    proVideo.src = '/stream-track/' + encodeURIComponent(pState.filename) + '?' + params.toString();
-    modeInfo.textContent = `🎧 Reproduciendo Pista ${trackIdx + 1} en memoria (-c copy · 0 bytes en disco)`;
+    player.pipe = true;
+    player.offset = Math.max(0, seek);
+    const params = new URLSearchParams({ track: String(track), start: String(Math.floor(player.offset)) });
+    video.src = `/stream-track/${encodeURIComponent(player.file)}?${params}`;
+    $('#playerMode').textContent = isTs && track === 0 ? 'Archivo TS: preparado al vuelo para el navegador' : `Pista de audio ${track + 1}`;
   }
-
-  renderAudioTracksMenu();
-  proVideo.play().catch(() => {});
+  renderAudioMenu();
+  video.play().catch(() => {});
 }
 
-function getEffectiveCurrentTime() {
-  if (pState.isPipeMode) {
-    return pState.pipeStartOffset + (Number(proVideo.currentTime) || 0);
+const currentTime = () => (player.pipe ? player.offset : 0) + (Number(video.currentTime) || 0);
+const totalTime = () => player.duration || (isFinite(video.duration) ? video.duration : 0);
+
+function seekTo(sec) {
+  const dur = totalTime();
+  sec = dur > 0 ? Math.max(0, Math.min(dur - 1, sec)) : Math.max(0, sec);
+  if (player.pipe) loadSource(player.track, sec); else video.currentTime = sec;
+}
+
+function closeMenus() { $('#vAudioMenu').hidden = true; $('#vSpeedMenu').hidden = true; }
+
+function togglePlay() {
+  closeMenus();
+  if (video.paused) video.play().catch(() => {}); else video.pause();
+}
+
+function wakeControls() {
+  const stage = $('#videoStage');
+  stage.classList.remove('idle');
+  clearTimeout(player.idleTimer);
+  if (!video.paused) player.idleTimer = setTimeout(() => { closeMenus(); stage.classList.add('idle'); }, 2600);
+}
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) $('#videoStage').requestFullscreen?.();
+  else document.exitFullscreen?.();
+}
+
+function setMuteIcon() { $('#vMute').innerHTML = icon(video.muted || video.volume === 0 ? 'mute' : 'volume'); }
+
+function closePlayer() {
+  player.open = false;
+  clearTimeout(player.idleTimer);
+  closeMenus();
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $('#playerBackdrop').hidden = true;
+  document.body.style.overflow = '';
+}
+
+video.addEventListener('click', togglePlay);
+video.addEventListener('play', () => { $('#vPlay').innerHTML = icon('pause'); wakeControls(); });
+video.addEventListener('pause', () => { $('#vPlay').innerHTML = icon('play'); $('#videoStage').classList.remove('idle'); });
+video.addEventListener('timeupdate', () => {
+  const cur = currentTime(), dur = totalTime();
+  $('#vTime').textContent = `${hms(cur)} / ${hms(dur)}`;
+  $('#vTimelineFill').style.width = `${dur > 0 ? Math.min(100, (cur / dur) * 100).toFixed(2) : 0}%`;
+});
+$('#videoStage').addEventListener('mousemove', wakeControls);
+$('#videoStage').addEventListener('touchstart', wakeControls, { passive: true });
+$('#videoStage').addEventListener('dblclick', e => { if (e.target === video) toggleFullscreen(); });
+
+const timelineRatio = e => {
+  const r = $('#vTimeline').getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+};
+$('#vTimeline').addEventListener('mousemove', e => {
+  const ratio = timelineRatio(e);
+  const tip = $('#vTimelineTooltip');
+  tip.style.left = `${ratio * 100}%`;
+  tip.textContent = hms(ratio * totalTime());
+});
+$('#vTimeline').addEventListener('click', e => { const d = totalTime(); if (d > 0) seekTo(timelineRatio(e) * d); });
+
+$('#vPlay').addEventListener('click', togglePlay);
+$('#vBack').addEventListener('click', () => seekTo(currentTime() - 10));
+$('#vFwd').addEventListener('click', () => seekTo(currentTime() + 10));
+$('#vMute').addEventListener('click', () => { video.muted = !video.muted; setMuteIcon(); });
+$('#vVol').addEventListener('input', e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; setMuteIcon(); });
+$('#vFull').addEventListener('click', toggleFullscreen);
+$('#vAudioBtn').addEventListener('click', e => { e.stopPropagation(); $('#vSpeedMenu').hidden = true; $('#vAudioMenu').hidden = !$('#vAudioMenu').hidden; });
+$('#vSpeedBtn').addEventListener('click', e => { e.stopPropagation(); $('#vAudioMenu').hidden = true; $('#vSpeedMenu').hidden = !$('#vSpeedMenu').hidden; });
+
+$('#vAudioMenu').addEventListener('click', e => {
+  const item = e.target.closest('[data-track]');
+  if (!item) return;
+  closeMenus();
+  const track = Number(item.dataset.track);
+  if (track === player.track) return;
+  // Si el navegador permite cambiar de pista sin recargar, mejor
+  if (!player.pipe && video.audioTracks && video.audioTracks.length > track) {
+    for (let i = 0; i < video.audioTracks.length; i++) video.audioTracks[i].enabled = i === track;
+    player.track = track;
+    renderAudioMenu();
+  } else {
+    loadSource(track, currentTime());
   }
-  return Number(proVideo.currentTime) || 0;
-}
+});
+$('#vSpeedMenu').addEventListener('click', e => {
+  const item = e.target.closest('[data-speed]');
+  if (!item) return;
+  video.playbackRate = Number(item.dataset.speed);
+  $('#vSpeedLabel').textContent = `${item.dataset.speed}x`;
+  $$('#vSpeedMenu .v-menu-item').forEach(b => b.classList.toggle('active', b === item));
+  closeMenus();
+});
 
-function getEffectiveDuration() {
-  if (pState.duration > 0) return pState.duration;
-  if (proVideo.duration && isFinite(proVideo.duration)) return proVideo.duration;
-  return 0;
-}
+$('#playerClose').addEventListener('click', closePlayer);
+$('#playerBackdrop').addEventListener('click', e => { if (e.target === e.currentTarget) closePlayer(); });
+$('#playerCopy').addEventListener('click', () => copyText(player.shareUrl, stripExt(player.file)));
 
-function selectAudioTrack(trackIdx) {
-  document.getElementById('vAudioMenu').classList.remove('open');
-  if (trackIdx === pState.activeTrackIdx) return;
-
-  const currentSec = getEffectiveCurrentTime();
-  // Si el navegador soporta audioTracks nativo en modo directo, cambiar también ahí si procede
-  if (!pState.isPipeMode && proVideo.audioTracks && proVideo.audioTracks.length > trackIdx) {
-    for (let i = 0; i < proVideo.audioTracks.length; i++) {
-      proVideo.audioTracks[i].enabled = (i === trackIdx);
-    }
-    pState.activeTrackIdx = trackIdx;
-    renderAudioTracksMenu();
-    showToast(`Cambiado a Pista ${trackIdx + 1}`, 'info');
+// ════════════════════════════════════════════
+//  Teclado y arranque
+// ════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (player.open) {
+    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (e.key === 'Escape') closePlayer();
+    else if (typing) return;
+    else if (e.key === ' ' && document.activeElement.tagName !== 'BUTTON') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); seekTo(currentTime() - 10); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(currentTime() + 10); }
+    else if (e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFullscreen(); }
+    else if (e.key.toLowerCase() === 'm') { e.preventDefault(); video.muted = !video.muted; setMuteIcon(); }
     return;
   }
-
-  loadPlayerSource(trackIdx, currentSec);
-  showToast(`Cambiado a Pista de audio ${trackIdx + 1}`, 'info');
-}
-
-function seekPlayerTo(targetSec) {
-  const dur = getEffectiveDuration();
-  if (dur > 0) targetSec = Math.max(0, Math.min(dur - 1, targetSec));
-  else targetSec = Math.max(0, targetSec);
-
-  if (!pState.isPipeMode) {
-    proVideo.currentTime = targetSec;
-  } else {
-    loadPlayerSource(pState.activeTrackIdx, targetSec);
-  }
-}
-
-function skipPlayerTime(deltaSec) {
-  seekPlayerTo(getEffectiveCurrentTime() + deltaSec);
-}
-
-function togglePlayPause() {
-  closeAllPlayerPopups();
-  if (proVideo.paused) proVideo.play().catch(() => {});
-  else proVideo.pause();
-}
-
-proVideo.addEventListener('play', () => {
-  document.getElementById('vPlayBtn').textContent = '⏸️';
-  onPlayerMouseMove();
-});
-proVideo.addEventListener('pause', () => {
-  document.getElementById('vPlayBtn').textContent = '▶️';
-  document.getElementById('videoStage').classList.remove('hide-controls');
-});
-proVideo.addEventListener('timeupdate', () => {
-  const cur = getEffectiveCurrentTime();
-  const dur = getEffectiveDuration();
-  document.getElementById('vTimeLabel').textContent = `${secsToHHMMSS(cur)} / ${secsToHHMMSS(dur)}`;
-  const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
-  document.getElementById('vTimelineFill').style.width = pct.toFixed(2) + '%';
+  if (e.key === 'Escape' && state.sheet) closeSheet();
 });
 
-function onTimelineHover(e) {
-  const rect = document.getElementById('vTimeline').getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  const dur = getEffectiveDuration();
-  const tt = document.getElementById('vTimelineTooltip');
-  tt.style.left = (ratio * 100) + '%';
-  tt.textContent = secsToHHMMSS(ratio * dur);
-}
+setInterval(refreshStatus, 2000);
+setInterval(updateCountdowns, 1000);
+setInterval(() => { if (state.view === 'recordings') loadRecordings(); }, 20000);
 
-function onTimelineSeek(e) {
-  const rect = document.getElementById('vTimeline').getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  const dur = getEffectiveDuration();
-  if (dur > 0) seekPlayerTo(ratio * dur);
-}
-
-function togglePlayerMute() {
-  proVideo.muted = !proVideo.muted;
-  document.getElementById('vMuteBtn').textContent = proVideo.muted ? '🔇' : '🔊';
-}
-
-function onVolumeChange(val) {
-  proVideo.volume = Number(val);
-  proVideo.muted = (Number(val) === 0);
-  document.getElementById('vMuteBtn').textContent = proVideo.muted ? '🔇' : '🔊';
-}
-
-function togglePlayerPopup(menuId) {
-  ['vAudioMenu', 'vSpeedMenu'].forEach(id => {
-    const el = document.getElementById(id);
-    if (id === menuId) el.classList.toggle('open');
-    else el.classList.remove('open');
-  });
-}
-
-function closeAllPlayerPopups() {
-  ['vAudioMenu', 'vSpeedMenu'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.classList.remove('open');
-  });
-}
-
-function setPlayerSpeed(rate) {
-  proVideo.playbackRate = rate;
-  document.getElementById('vSpeedBtnText').textContent = rate + 'x';
-  const menu = document.getElementById('vSpeedMenu');
-  menu.querySelectorAll('.v-menu-item').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.startsWith(rate + 'x'));
-  });
-  menu.classList.remove('open');
-}
-
-function togglePlayerFullscreen() {
-  const stage = document.getElementById('videoStage');
-  if (!document.fullscreenElement) {
-    if (stage.requestFullscreen) stage.requestFullscreen();
-  } else {
-    if (document.exitFullscreen) document.exitFullscreen();
-  }
-}
-
-function onPlayerMouseMove() {
-  const stage = document.getElementById('videoStage');
-  stage.classList.remove('hide-controls');
-  clearTimeout(pState.hideTimer);
-  if (!proVideo.paused) {
-    pState.hideTimer = setTimeout(() => {
-      closeAllPlayerPopups();
-      stage.classList.add('hide-controls');
-    }, 2600);
-  }
-}
-
-function copyCurrentStreamUrl() {
-  const url = pState.shareUrl || (window.location.origin + '/stream/' + encodeURIComponent(pState.filename));
-  copyToClipboard(url, pState.filename);
-}
-
-function closeVideoPlayer() {
-  pState.open = false;
-  clearTimeout(pState.hideTimer);
-  closeAllPlayerPopups();
-  proVideo.pause();
-  proVideo.removeAttribute('src');
-  proVideo.load();
-  if (document.fullscreenElement && document.exitFullscreen) {
-    document.exitFullscreen().catch(() => {});
-  }
-  document.getElementById('playerModalBackdrop').classList.remove('open');
-}
-
-document.addEventListener('keydown', e => {
-  if (!pState.open) return;
-  if (e.key === 'Escape') { closeVideoPlayer(); }
-  else if (e.key === ' ' && document.activeElement.tagName !== 'BUTTON') { e.preventDefault(); togglePlayPause(); }
-  else if (e.key === 'ArrowLeft')  { e.preventDefault(); skipPlayerTime(-10); }
-  else if (e.key === 'ArrowRight') { e.preventDefault(); skipPlayerTime(10); }
-  else if (e.key.toLowerCase() === 'f') { e.preventDefault(); togglePlayerFullscreen(); }
-  else if (e.key.toLowerCase() === 'm') { e.preventDefault(); togglePlayerMute(); }
-});
+(async function init() {
+  refreshStatus();
+  loadVpnCountries().catch(() => {});
+  await loadGroups().catch(() => {});
+  showView(HASH_VIEWS[location.hash] || 'channels');
+})();

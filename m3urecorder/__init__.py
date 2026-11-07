@@ -10,11 +10,13 @@ from flask import Flask
 
 from . import auth, routes
 from .channels import ChannelList
+from .logos import LogoCache
 from .notify import Notifier
 from .recorder import Recorder
 from .scheduler import Scheduler
 from .settings import APP_VERSION, Settings
 from .storage import HistoryStore, NotificationStore, ScheduleStore
+from .thumbs import ThumbnailCache
 from .timeutils import set_timezone
 from .utils import log
 from .vpn import VpnController
@@ -34,6 +36,8 @@ class Services:
     channels: ChannelList
     recorder: Recorder
     scheduler: Scheduler
+    logos: LogoCache
+    thumbnails: ThumbnailCache
 
 
 def build_services(settings: Settings) -> Services:
@@ -51,9 +55,14 @@ def build_services(settings: Settings) -> Services:
     vpn.load_countries()
     channels = ChannelList(settings.m3u_list_file)
     channels.load()
+    logos = LogoCache(os.path.join(settings.cache_dir, "logos"))
+    thumbnails = ThumbnailCache(os.path.join(settings.cache_dir, "thumbs"), settings.output_dir)
     recorder = Recorder(settings, vpn, notifier, history, schedules)
+    recorder.channel_lookup = channels.find_by_url
+    recorder.thumbnails = thumbnails
     scheduler = Scheduler(settings, recorder, schedules, notifier)
-    return Services(settings, history, schedules, notifications, notifier, vpn, channels, recorder, scheduler)
+    return Services(settings, history, schedules, notifications, notifier, vpn, channels, recorder, scheduler,
+                    logos, thumbnails)
 
 
 def create_app(settings: Settings = None, start_background: bool = True) -> Flask:

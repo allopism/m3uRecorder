@@ -33,6 +33,8 @@ IDLE_STATUS = {
     'mode': None,
     'vpn_country': None,
     'last_result': None,
+    'channel': None,
+    'logo_id': None,
 }
 
 
@@ -75,6 +77,8 @@ class Recorder:
         self._names_lock = threading.Lock()
         self._preswitch = {}           # job_id -> preconexión VPN en curso o terminada
         self.on_capture_released = None  # aviso al programador de que el hueco quedó libre
+        self.channel_lookup = None       # url -> canal de la lista (para nombre y logo)
+        self.thumbnails = None           # ThumbnailCache
 
     # ── Reserva del grabador ──────────────────
     def is_busy(self) -> bool:
@@ -218,12 +222,16 @@ class Recorder:
         filename = plan.filename
         filepath = os.path.join(s.output_dir, filename)
 
+        channel = (self.channel_lookup(plan.url) if self.channel_lookup else None) or {}
+        channel_name, logo = channel.get("name", ""), channel.get("logo_id", "")
+
         owner = object()
         with self._lock:
             self._status_owner = owner
             self.stop_requested = self.shutdown_requested  # limpia un "parar" antiguo
             self.status.update(running=True, mode=plan.kind, filename=filename,
                                vpn_country=plan.vpn_country or None, pid=None,
+                               channel=channel_name or None, logo_id=logo or None,
                                progress=f"{prefix}Preparando: {filename}...")
 
         previous_country, did_switch = "", False
@@ -334,6 +342,8 @@ class Recorder:
                 returncodes, filepath, requested, was_stopped, by_shutdown)
             if media_sec == 0 and size > 0:
                 media_sec = elapsed
+            if size > 0 and self.thumbnails:
+                self.thumbnails.get(filename)
             reason = "; ".join(reasons + ([note] if note else []))
             log(f"Finalizada {'Programada' if plan.scheduled else 'Inmediata'}: {filename} | Estado: {result} "
                 f"| Tamaño: {human_size(size)} | Detalles: {reason}")
@@ -351,6 +361,7 @@ class Recorder:
                 "duration_seconds": elapsed, "media_duration_seconds": media_sec,
                 "format": plan.format, "filesize_bytes": size, "filesize_human": human_size(size),
                 "status": result, "status_reason": reason, "vpn_country": country, "type": plan.kind,
+                "channel": channel_name, "logo_id": logo,
             }
             if job is not None:
                 entry.update(scheduled_start=job['start_time'], scheduled_end=job['end_time'])
@@ -390,8 +401,8 @@ class Recorder:
                 return
             self.status.update(fields)
             if not self._capturing:
-                self.status.update(running=False, pid=None, start_time=None,
-                                   duration_requested=None, mode=None, vpn_country=None)
+                self.status.update(running=False, pid=None, start_time=None, duration_requested=None,
+                                   mode=None, vpn_country=None, channel=None, logo_id=None)
                 self._status_owner = None
 
     def _handover_watcher(self, job, end_utc, handover: threading.Event, proc_done: threading.Event) -> None:

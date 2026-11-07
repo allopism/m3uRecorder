@@ -1,479 +1,327 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>M3U8 Stream Recorder · DVR + VPN</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#090d16">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=version) }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>m3uRecorder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='%23e03131'/%3E%3Ccircle cx='12' cy='12' r='4' fill='white'/%3E%3C/svg%3E">
+  <script>
+    // Aplicar el tema guardado antes de pintar, para evitar un parpadeo
+    try { var t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=version) }}">
 </head>
-<body>
-<div class="app-shell">
+<body data-m3u-file="{{ m3u_file }}">
 
-  <!-- Top Header -->
-  <div class="topbar">
-    <div class="brand">
-      <div class="brand-icon">🎬</div>
-      <div class="brand-text">
-        <h1>M3U8 Stream Recorder</h1>
-        <p>Grabación directa (-c copy) · ProtonVPN &amp; resistente a cambios de hora</p>
-      </div>
-    </div>
-    <div class="topbar-pills">
-      <!-- Selector y Estado VPN en vivo -->
-      <div class="pill pill-vpn" id="vpnPill" title="Estado de Gluetun VPN">
-        <span class="dot" id="vpnDot"></span>
-        <span id="vpnStatusText">🛡️ VPN</span>
-        <select id="topbarVpnSelect" class="vpn-quick-select" onchange="changeGlobalVpnCountry(this.value)" title="Cambiar país activo de la VPN">
-          <option value="">🌍 País...</option>
-        </select>
-      </div>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4M3.3 19a10 10 0 1 1 17.4 0"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+</svg>
 
-      {% if auth_enabled %}<a class="pill" href="{{ url_for('auth.logout') }}" title="Cerrar sesión" style="text-decoration:none">🔒 Salir</a>{% endif %}
-      <div class="pill pill-clock" title="Hora local actual y zona horaria activa">
-        <span>🕐</span>
-        <span id="serverClock">--:--:--</span>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#canales" data-nav="channels">
+      <svg class="ico brand-ico"><use href="#i-record"/></svg>
+      <span>m3uRecorder</span>
+    </a>
+
+    <nav class="nav" aria-label="Secciones">
+      <a href="#canales" class="nav-item" data-nav="channels">
+        <svg class="ico"><use href="#i-tv"/></svg><span>Canales</span>
+      </a>
+      <a href="#grabaciones" class="nav-item" data-nav="recordings">
+        <svg class="ico"><use href="#i-film"/></svg><span>Grabaciones</span>
+        <span class="nav-badge" id="upcomingBadge" hidden>0</span>
+      </a>
+    </nav>
+
+    <div class="topbar-actions">
+      <div class="vpn" id="vpnBox" hidden>
+        <button type="button" class="btn btn-ghost vpn-btn" id="vpnBtn" aria-haspopup="true" aria-expanded="false">
+          <span class="dot" id="vpnDot"></span>
+          <svg class="ico"><use href="#i-shield"/></svg>
+          <span id="vpnLabel">VPN</span>
+        </button>
+        <div class="popover" id="vpnPopover" hidden>
+          <p class="popover-title">VPN</p>
+          <p class="muted small" id="vpnDetails">Comprobando…</p>
+          <label class="field-label" for="vpnGlobalSelect">Cambiar país</label>
+          <select id="vpnGlobalSelect"></select>
+        </div>
       </div>
-      <div class="pill" id="globalStatePill">
-        <span class="dot" id="globalDot"></span>
-        <span id="globalStateText">Listo</span>
-      </div>
+      <button type="button" class="btn btn-icon btn-ghost" id="themeBtn" title="Tema">
+        <svg class="ico"><use href="#i-auto"/></svg>
+      </button>
+      {% if auth_enabled %}
+      <a class="btn btn-icon btn-ghost" href="{{ url_for('auth.logout') }}" title="Cerrar sesión">
+        <svg class="ico"><use href="#i-logout"/></svg>
+      </a>
+      {% endif %}
     </div>
   </div>
 
-  <!-- Global Live Recording Status Banner -->
-  <div id="statusBanner" class="live-banner">
-    <div class="live-banner-top">
-      <div class="live-status-main">
-        <span id="statusIcon">🟢</span>
-        <span id="statusText">{{ ready_status }}</span>
+  <div class="livebar" id="liveBar" hidden>
+    <div class="livebar-inner">
+      <div class="livebar-thumb" id="liveThumb"></div>
+      <div class="livebar-info">
+        <div class="livebar-title"><span class="rec-dot"></span><span id="liveTitle">Grabando</span></div>
+        <div class="livebar-sub" id="liveSub"></div>
+        <div class="progress"><div class="progress-fill" id="liveProgress"></div></div>
       </div>
-      <div class="live-metrics">
-        <span id="liveTimer" style="display:none;">00:00:00 / 00:00:00</span>
-        <button id="globalStopBtn" class="btn-danger btn-sm" style="display:none;" onclick="stopRecord()">⏹️ Detener grabación</button>
-      </div>
-    </div>
-    <div class="progress-track" id="progressContainer" style="display:none;">
-      <div class="progress-fill" id="progressBar"></div>
+      <button type="button" class="btn btn-rec" id="stopBtn">
+        <svg class="ico"><use href="#i-stop"/></svg><span>Detener</span>
+      </button>
     </div>
   </div>
+</header>
 
-  <!-- Navigation Tabs -->
-  <div class="nav-tabs">
-    <button id="tabRecord" class="nav-tab active" onclick="showTab('record')">
-      <span class="tab-icon">📹</span>
-      <span class="tab-label-full">Grabador Directo</span>
-      <span class="tab-label-short">Directo</span>
-    </button>
-    <button id="tabSchedule" class="nav-tab" onclick="showTab('schedule')">
-      <span class="tab-icon">📅</span>
-      <span class="tab-label-full">Programar</span>
-      <span class="tab-label-short">Programar</span>
-      <span class="tab-count" id="badgeSchedulesCount">0</span>
-    </button>
-    <button id="tabChannels" class="nav-tab" onclick="showTab('channels')">
-      <span class="tab-icon">📺</span>
-      <span class="tab-label-full">Canales M3U</span>
-      <span class="tab-label-short">Canales</span>
-      <span class="tab-count" id="badgeChannelsCount">{{ channels_count }}</span>
-    </button>
-    <button id="tabHistory" class="nav-tab" onclick="showTab('history')">
-      <span class="tab-icon">📜</span>
-      <span class="tab-label-full">Historial</span>
-      <span class="tab-label-short">Historial</span>
-      <span class="tab-count" id="badgeHistoryCount">0</span>
-    </button>
-  </div>
-
-  <div class="content">
-
-    <!-- TAB 1: GRABADOR DIRECTO -->
-    <div id="recordView">
-      <div class="panel-card">
-        <div class="card-header">
-          <div class="card-title">⚡ Nueva grabación al vuelo</div>
-          <span style="font-size:12px;color:var(--text-secondary)">Calidad original intacta · Reconexión automática activa</span>
-        </div>
-
-        <form id="form">
-          <div class="form-group">
-            <label><span>🔗 Enlace del Stream (M3U8 / TS / HTTP)</span></label>
-            <input type="url" id="url" placeholder="https://ejemplo.com/live/canal.m3u8" required>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>
-                <span>⏱️ Duración (HH:MM:SS)</span>
-                <span style="font-weight:400;font-size:11.5px;color:var(--text-secondary)">Elige o escribe</span>
-              </label>
-              <input type="text" id="duration" class="mono-input" value="01:00:00" pattern="\d{2,}:\d{2}:\d{2}" required>
-              <div class="preset-chips">
-                <button type="button" class="chip" onclick="setDirectDuration('00:15:00')">15m</button>
-                <button type="button" class="chip" onclick="setDirectDuration('00:30:00')">30m</button>
-                <button type="button" class="chip" onclick="setDirectDuration('01:00:00')">1h</button>
-                <button type="button" class="chip" onclick="setDirectDuration('01:30:00')">1h 30m</button>
-                <button type="button" class="chip" onclick="setDirectDuration('02:00:00')">2h</button>
-                <button type="button" class="chip" onclick="setDirectDuration('03:00:00')">3h</button>
-                <button type="button" class="chip" onclick="setDirectDuration('04:00:00')">4h</button>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label>
-                <span>🌍 País VPN para esta grabación</span>
-                <span style="font-weight:400;font-size:11.5px;color:#6ee7b7">Vuelve al país previo al acabar</span>
-              </label>
-              <select id="rVpnCountry">
-                <option value="">🛡️ Usar país actual de la VPN (Sin cambiar)</option>
-              </select>
-              <div class="preset-chips">
-                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Spain'">🇪🇸 España</button>
-                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Japan'">🇯🇵 Japón</button>
-                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Switzerland'">🇨🇭 Suiza</button>
-                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value='Netherlands'">🇳🇱 Países Bajos</button>
-                <button type="button" class="chip" onclick="document.getElementById('rVpnCountry').value=''">🛡️ Actual</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>
-                <span>📝 Nombre del archivo (sin extensión)</span>
-                <span style="cursor:pointer;color:#60a5fa;font-size:12px;" onclick="refreshDefaultFilename()">🔄 Actualizar hora</span>
-              </label>
-              <input type="text" id="filename" value="grabacion_{{ now_ts }}" required>
-            </div>
-
-            <div class="form-group">
-              <label><span>📦 Contenedor de salida</span></label>
-              <select id="format">
-                <option value="mp4">MP4 (.mp4) — Estándar universal</option>
-                <option value="mkv">MKV (.mkv) — Soporta subtítulos DVB y multipista</option>
-                <option value="ts">MPEG-TS (.ts) — Volcado puro de transporte</option>
-                <option value="avi">AVI (.avi)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="btn-group">
-            <button type="submit" class="btn-primary" style="flex:2;">▶️ Iniciar Grabación Ahora</button>
-            <button type="button" class="btn-secondary" style="flex:1;" onclick="stopRecord()">⏹️ Detener</button>
-          </div>
-        </form>
-
-        <a id="download" class="download-banner" style="display:none;"></a>
+<main class="main">
+  <!-- Canales -->
+  <section class="view" id="view-channels" data-view="channels">
+    <div class="toolbar">
+      <div class="search">
+        <svg class="ico"><use href="#i-search"/></svg>
+        <input type="search" id="channelSearch" placeholder="Buscar canal" autocomplete="off">
       </div>
+      <button type="button" class="btn btn-primary" id="manualUrlBtn">
+        <svg class="ico"><use href="#i-link"/></svg><span>Pegar URL</span>
+      </button>
+    </div>
+    <div class="chips-row" id="groupChips"></div>
+    <div class="section-head">
+      <p class="muted small" id="channelsInfo"></p>
+      <button type="button" class="btn btn-ghost btn-sm" id="reloadListBtn" title="Volver a leer la lista M3U">
+        <svg class="ico"><use href="#i-refresh"/></svg><span>Recargar lista</span>
+      </button>
+    </div>
+    <div class="channel-grid" id="channelGrid"></div>
+  </section>
 
-      <div class="panel-card" style="margin-bottom:0;">
-        <div class="card-header" style="margin-bottom:12px;padding-bottom:10px;">
-          <div class="card-title" style="font-size:14px;">🖥️ Consola de eventos</div>
-          <button type="button" class="btn-secondary btn-sm" onclick="document.getElementById('log').innerHTML=''">🧹 Limpiar</button>
+  <!-- Grabaciones -->
+  <section class="view" id="view-recordings" data-view="recordings" hidden>
+    <div id="upcomingSection" hidden>
+      <h2 class="section-title">Próximas</h2>
+      <div class="list" id="upcomingList"></div>
+    </div>
+
+    <div class="section-head">
+      <h2 class="section-title">Biblioteca</h2>
+      <p class="muted small" id="librarySummary"></p>
+    </div>
+    <div class="library-grid" id="libraryGrid"></div>
+
+    <details class="past" id="pastSection" hidden>
+      <summary>Programaciones anteriores <span class="muted" id="pastCount"></span></summary>
+      <div class="list" id="pastList"></div>
+      <div class="past-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="clearPastBtn">Limpiar lista</button>
+        <button type="button" class="btn btn-ghost btn-sm danger-text" id="clearHistoryBtn">Vaciar historial de grabaciones</button>
+      </div>
+    </details>
+  </section>
+</main>
+
+<!-- Panel para grabar o programar -->
+<div class="sheet-backdrop" id="sheetBackdrop" hidden>
+  <form class="sheet" id="recordSheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" novalidate>
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div class="sheet-channel">
+        <div class="logo-tile" id="sheetLogo"></div>
+        <div class="sheet-channel-text">
+          <h2 id="sheetTitle">Nueva grabación</h2>
+          <p class="muted small" id="sheetSubtitle"></p>
         </div>
-        <div id="log" class="log-box"></div>
+      </div>
+      <div class="sheet-head-actions">
+        <button type="button" class="btn btn-icon btn-ghost" id="sheetCopy" title="Copiar enlace del canal">
+          <svg class="ico"><use href="#i-copy"/></svg>
+        </button>
+        <button type="button" class="btn btn-icon btn-ghost" data-close-sheet title="Cerrar">
+          <svg class="ico"><use href="#i-x"/></svg>
+        </button>
       </div>
     </div>
 
-    <!-- TAB 2: PROGRAMAR GRABACIÓN -->
-    <div id="scheduleView" style="display:none;">
-      <div class="panel-card">
-        <div class="card-header">
-          <div class="card-title">📅 Programar nueva grabación</div>
-          <span style="font-size:12px;color:#93c5fd;">🌙 Compatible con cambios de horario Verano ↔ Invierno &amp; Cambio de país VPN</span>
-        </div>
-
-        <form id="scheduleForm">
-          <div class="form-group">
-            <label><span>🔗 Enlace del Stream (M3U8 / TS / HTTP)</span></label>
-            <input type="url" id="sUrl" placeholder="https://ejemplo.com/live/canal.m3u8" required>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>
-                <span>🕐 Fecha y hora de Inicio</span>
-                <span id="sStartTzBadge" class="badge-tz"></span>
-              </label>
-              <input type="datetime-local" id="sStart" required onchange="onScheduleDatesChanged()" oninput="onScheduleDatesChanged()">
-              <div class="preset-chips">
-                <button type="button" class="chip" onclick="setScheduleStartOffset(2)">En 2 min</button>
-                <button type="button" class="chip" onclick="setScheduleStartOffset(15)">En 15 min</button>
-                <button type="button" class="chip" onclick="setScheduleStartOffset(60)">En 1h</button>
-              </div>
-              <div id="sStartAmbiguousBox" class="dst-fold-box" style="display:none;">
-                <div>⚠️ <strong>Cambio de hora:</strong> Esta hora ocurre dos veces esta noche. ¿Cuál quieres usar?</div>
-                <div class="dst-fold-options">
-                  <button type="button" id="sStartFold0" class="fold-btn active" onclick="setFold('start', 0)">☀️ 1ª vez · Horario verano (UTC+2)</button>
-                  <button type="button" id="sStartFold1" class="fold-btn" onclick="setFold('start', 1)">❄️ 2ª vez · Horario invierno (UTC+1)</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label>
-                <span>🕑 Fecha y hora de Fin</span>
-                <span id="sEndTzBadge" class="badge-tz"></span>
-              </label>
-              <input type="datetime-local" id="sEnd" required onchange="onScheduleDatesChanged()" oninput="onScheduleDatesChanged()">
-              <div class="preset-chips">
-                <button type="button" class="chip" onclick="addScheduleDuration(30)">+30m reales</button>
-                <button type="button" class="chip" onclick="addScheduleDuration(60)">+1h real</button>
-                <button type="button" class="chip" onclick="addScheduleDuration(90)">+1h 30m</button>
-                <button type="button" class="chip" onclick="addScheduleDuration(120)">+2h reales</button>
-                <button type="button" class="chip" onclick="addScheduleDuration(180)">+3h reales</button>
-                <button type="button" class="chip" onclick="addScheduleDuration(240)">+4h reales</button>
-              </div>
-              <div id="sEndAmbiguousBox" class="dst-fold-box" style="display:none;">
-                <div>⚠️ <strong>Cambio de hora:</strong> Esta hora ocurre dos veces esta noche. ¿Cuál quieres usar?</div>
-                <div class="dst-fold-options">
-                  <button type="button" id="sEndFold0" class="fold-btn active" onclick="setFold('end', 0)">☀️ 1ª vez · Horario verano (UTC+2)</button>
-                  <button type="button" id="sEndFold1" class="fold-btn" onclick="setFold('end', 1)">❄️ 2ª vez · Horario invierno (UTC+1)</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Resumen en vivo de duración y cambio de hora -->
-          <div id="schedulePreview" class="schedule-preview">
-            <div id="schedulePreviewText">Selecciona inicio y fin para calcular la duración real.</div>
-            <div id="schedulePreviewDuration" class="mono-input" style="font-weight:700;color:#60a5fa;font-size:15px;">--:--:--</div>
-          </div>
-
-          <div class="form-row-3">
-            <div class="form-group">
-              <label><span>📝 Nombre del archivo</span></label>
-              <input type="text" id="sFilename" required>
-            </div>
-            <div class="form-group">
-              <label><span>📦 Contenedor</span></label>
-              <select id="sFormat">
-                <option value="mp4">MP4 (.mp4)</option>
-                <option value="mkv">MKV (.mkv)</option>
-                <option value="ts">MPEG-TS (.ts)</option>
-                <option value="avi">AVI (.avi)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>
-                <span>🌍 País VPN para esta tarea</span>
-                <span style="font-weight:400;font-size:11px;color:#6ee7b7">Auto-restaura al acabar</span>
-              </label>
-              <select id="sVpnCountry">
-                <option value="">🛡️ Mantener país actual</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="btn-group">
-            <button type="submit" class="btn-primary" style="width:100%;">📅 Guardar programación</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="panel-card" style="margin-bottom:0;">
-        <div class="card-header">
-          <div class="card-title">📋 Cola de grabaciones programadas</div>
-          <div style="display:flex;gap:8px;">
-            <button class="btn-secondary btn-sm" onclick="loadSchedules()">🔄 Actualizar</button>
-            <button class="btn-danger btn-sm" onclick="clearSchedules()">🗑️ Limpiar finalizadas</button>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Archivo / VPN</th>
-                <th>Inicio programado</th>
-                <th>Fin programado</th>
-                <th>Duración real</th>
-                <th>Fmt</th>
-                <th>Estado</th>
-                <th>Cuenta atrás / Detalle</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="scheduleBody"></tbody>
-          </table>
-        </div>
-      </div>
+    <div class="field" id="urlField" hidden>
+      <label class="field-label" for="fUrl">Enlace del stream</label>
+      <input type="url" id="fUrl" placeholder="https://ejemplo.com/directo/index.m3u8" autocomplete="off">
     </div>
 
-    <!-- TAB 3: CANALES M3U -->
-    <div id="channelsView" style="display:none;">
-      <div class="panel-card" style="margin-bottom:0;">
-        <div class="card-header">
-          <div>
-            <div class="card-title">📺 Explorador de Canales M3U</div>
-            <div style="font-size:12.5px;color:var(--text-secondary);margin-top:4px;" id="m3uStatusInfo">{% if channels_count %}<strong style='color:#6ee7b7'>✅ Lista cargada con {{ channels_count }} canales ({{ groups_count }} categorías).</strong>{% else %}<strong style='color:#fda4af'>⚠️ No se encontró el archivo {{ m3u_file }} en el servidor.</strong>{% endif %}</div>
-          </div>
-          <button class="btn-secondary btn-sm" onclick="reloadM3uServer()">🔄 Recargar archivo lista.m3u</button>
-        </div>
+    <div class="segmented" role="tablist">
+      <button type="button" class="seg-btn" data-mode="now" role="tab">Ahora</button>
+      <button type="button" class="seg-btn" data-mode="schedule" role="tab">Programar</button>
+    </div>
 
-        <div class="search-bar">
-          <input type="text" id="searchInput" placeholder="🔍 Escribe el nombre del canal (ej. La 1, Movistar, DAZN, Eurosport...)" oninput="debouncedSearch()" onkeypress="if(event.key === 'Enter') searchChannels()">
-          <select id="groupFilter" onchange="searchChannels()">
-            <option value="">📂 Todas las categorías</option>
+    <div class="mode-now">
+      <span class="field-label">Duración</span>
+      <div class="chips" id="durationChips">
+        <button type="button" class="chip" data-dur="00:15:00">15 min</button>
+        <button type="button" class="chip" data-dur="00:30:00">30 min</button>
+        <button type="button" class="chip" data-dur="01:00:00">1 h</button>
+        <button type="button" class="chip" data-dur="02:00:00">2 h</button>
+        <button type="button" class="chip" data-dur="03:00:00">3 h</button>
+        <button type="button" class="chip" data-dur="custom">Otra</button>
+      </div>
+      <input type="text" id="fDuration" class="mono" placeholder="HH:MM:SS" inputmode="numeric" hidden>
+    </div>
+
+    <div class="mode-schedule" hidden>
+      <div class="two-cols">
+        <div class="field">
+          <label class="field-label" for="fStart">Empieza</label>
+          <input type="datetime-local" id="fStart">
+          <div class="chips chips-sm">
+            <button type="button" class="chip" data-start-in="5">En 5 min</button>
+            <button type="button" class="chip" data-start-in="15">En 15 min</button>
+            <button type="button" class="chip" data-start-in="60">En 1 h</button>
+          </div>
+          <div class="fold" id="foldStart" hidden>
+            <span class="muted small">Esa hora ocurre dos veces por el cambio de hora:</span>
+            <div class="chips chips-sm">
+              <button type="button" class="chip" data-fold="start:0">1.ª vez (verano)</button>
+              <button type="button" class="chip" data-fold="start:1">2.ª vez (invierno)</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="fEnd">Termina</label>
+          <input type="datetime-local" id="fEnd">
+          <div class="chips chips-sm">
+            <button type="button" class="chip" data-length="30">30 min</button>
+            <button type="button" class="chip" data-length="60">1 h</button>
+            <button type="button" class="chip" data-length="120">2 h</button>
+            <button type="button" class="chip" data-length="180">3 h</button>
+          </div>
+          <div class="fold" id="foldEnd" hidden>
+            <span class="muted small">Esa hora ocurre dos veces por el cambio de hora:</span>
+            <div class="chips chips-sm">
+              <button type="button" class="chip" data-fold="end:0">1.ª vez (verano)</button>
+              <button type="button" class="chip" data-fold="end:1">2.ª vez (invierno)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="summary" id="scheduleSummary"></p>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="fName">Nombre</label>
+      <input type="text" id="fName" autocomplete="off">
+    </div>
+
+    <details class="options">
+      <summary><svg class="ico"><use href="#i-chevron"/></svg><span id="optionsSummary">Opciones</span></summary>
+      <div class="two-cols">
+        <div class="field">
+          <label class="field-label" for="fFormat">Formato</label>
+          <select id="fFormat">
+            <option value="mp4">MP4 · el más compatible</option>
+            <option value="mkv">MKV · conserva subtítulos y pistas</option>
+            <option value="ts">TS · copia exacta del directo</option>
+            <option value="avi">AVI</option>
           </select>
-          <button class="btn-primary" onclick="searchChannels()">Buscar</button>
         </div>
-
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:12.5px;color:var(--text-secondary);">
-          <span>Selecciona un canal para copiar su enlace o enviarlo directamente al grabador.</span>
-          <span id="resultsInfo"></span>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Canal</th>
-                <th>Categoría</th>
-                <th style="width:270px;text-align:right;">Acciones rápidas</th>
-              </tr>
-            </thead>
-            <tbody id="channelsBody">
-              <tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:36px;">Escribe para buscar o selecciona una categoría</td></tr>
-            </tbody>
-          </table>
+        <div class="field" id="vpnField">
+          <label class="field-label" for="fVpn">País de la VPN</label>
+          <select id="fVpn"></select>
         </div>
       </div>
-    </div>
+    </details>
 
-    <!-- TAB 4: HISTORIAL -->
-    <div id="historyView" style="display:none;">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total grabaciones</div>
-          <div class="stat-value" id="statTotal">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Completadas con éxito</div>
-          <div class="stat-value" style="color:var(--accent-emerald);" id="statOk">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Fallidas / Interrumpidas</div>
-          <div class="stat-value" style="color:var(--accent-rose);" id="statFailed">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Espacio ocupado</div>
-          <div class="stat-value" style="color:#60a5fa;" id="statSize">0 B</div>
-        </div>
-      </div>
-
-      <div class="panel-card" style="margin-bottom:0;">
-        <div class="card-header">
-          <div class="card-title">📜 Histórico de grabaciones</div>
-          <div style="display:flex;gap:8px;">
-            <button class="btn-secondary btn-sm" onclick="loadHistory()">🔄 Recargar</button>
-            <button class="btn-danger btn-sm" onclick="clearHistory()">🗑️ Vaciar registro</button>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Archivo / VPN</th>
-                <th>Modo</th>
-                <th>Inicio real</th>
-                <th>Dur. pedida</th>
-                <th>Dur. grabada</th>
-                <th>Tamaño</th>
-                <th>Estado</th>
-                <th style="text-align:right;">Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="historyBody"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-  </div>
+    <p class="form-error" id="sheetError" hidden></p>
+    <button type="submit" class="btn btn-primary btn-block" id="sheetSubmit">Empezar a grabar</button>
+  </form>
 </div>
 
-<div class="toast-container" id="toastContainer"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
-<!-- Modal Modo Cine con Reproductor Pro y Selector Multipista de Audio -->
-<div class="player-modal-backdrop" id="playerModalBackdrop" onclick="if(event.target===this) closeVideoPlayer()">
-  <div class="player-modal">
-    <div class="player-modal-header">
-      <div class="player-modal-title">
-        <span>🎬</span>
-        <span class="fname" id="playerModalTitle">Reproductor</span>
-        <span class="badge-tz" id="playerCodecBadge" style="display:none;"></span>
+<!-- Reproductor -->
+<div class="player-backdrop" id="playerBackdrop" hidden>
+  <div class="player" role="dialog" aria-modal="true" aria-labelledby="playerTitle">
+    <div class="player-head">
+      <div class="player-title">
+        <h2 id="playerTitle">Reproductor</h2>
+        <span class="tag" id="playerCodec" hidden></span>
       </div>
-      <button type="button" class="player-close-btn" onclick="closeVideoPlayer()">✕ Cerrar (Esc)</button>
+      <button type="button" class="btn btn-icon btn-ghost" id="playerClose" title="Cerrar (Esc)">
+        <svg class="ico"><use href="#i-x"/></svg>
+      </button>
     </div>
 
-    <div class="video-stage" id="videoStage" onmousemove="onPlayerMouseMove()" ontouchstart="onPlayerMouseMove()" ondblclick="togglePlayerFullscreen()">
-      <video id="proVideo" playsinline preload="metadata" onclick="togglePlayPause()"></video>
-
-      <div class="v-controls" id="vControls" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()">
-        <div class="v-timeline" id="vTimeline" onmousemove="onTimelineHover(event)" onclick="onTimelineSeek(event)">
-          <div class="v-timeline-fill" id="vTimelineFill">
-            <div class="v-timeline-thumb"></div>
-          </div>
+    <div class="stage" id="videoStage">
+      <video id="proVideo" playsinline preload="metadata"></video>
+      <div class="v-controls" id="vControls">
+        <div class="v-timeline" id="vTimeline">
+          <div class="v-timeline-fill" id="vTimelineFill"></div>
           <div class="v-timeline-tooltip" id="vTimelineTooltip">00:00:00</div>
         </div>
-
-        <div class="v-bar-row">
-          <div class="v-bar-left">
-            <button type="button" class="v-btn" id="vPlayBtn" onclick="togglePlayPause()" title="Play / Pausa (Espacio)">▶️</button>
-            <button type="button" class="v-btn" onclick="skipPlayerTime(-10)" title="Retroceder 10s (←)">⏪ 10s</button>
-            <button type="button" class="v-btn" onclick="skipPlayerTime(10)" title="Adelantar 10s (→)">10s ⏩</button>
-            <button type="button" class="v-btn" id="vMuteBtn" onclick="togglePlayerMute()" title="Silenciar (M)">🔊</button>
-            <input type="range" class="v-vol-slider" id="vVolSlider" min="0" max="1" step="0.05" value="1" oninput="onVolumeChange(this.value)">
-            <span class="v-time" id="vTimeLabel">00:00:00 / 00:00:00</span>
+        <div class="v-row">
+          <div class="v-group">
+            <button type="button" class="v-btn" id="vPlay" title="Reproducir / pausa (espacio)"><svg class="ico"><use href="#i-play"/></svg></button>
+            <button type="button" class="v-btn" id="vBack" title="Retroceder 10 s (←)"><svg class="ico"><use href="#i-back"/></svg></button>
+            <button type="button" class="v-btn" id="vFwd" title="Adelantar 10 s (→)"><svg class="ico"><use href="#i-refresh"/></svg></button>
+            <button type="button" class="v-btn" id="vMute" title="Silenciar (M)"><svg class="ico"><use href="#i-volume"/></svg></button>
+            <input type="range" class="v-vol" id="vVol" min="0" max="1" step="0.05" value="1" aria-label="Volumen">
+            <span class="v-time" id="vTime">00:00:00 / 00:00:00</span>
           </div>
-
-          <div class="v-bar-right">
-            <!-- Selector integrado de Pista de Audio -->
+          <div class="v-group">
             <div class="v-menu-wrap">
-              <button type="button" class="v-btn" id="vAudioBtn" onclick="togglePlayerPopup('vAudioMenu')" title="Seleccionar pista de audio">
-                🎧 <span id="vAudioBtnText">Audio</span>
-              </button>
-              <div class="v-popup-menu" id="vAudioMenu">
-                <div class="v-popup-title">🎧 Pistas de audio</div>
-                <div id="vAudioMenuItems"></div>
+              <button type="button" class="v-btn" id="vAudioBtn" title="Pista de audio"><svg class="ico"><use href="#i-headphones"/></svg><span id="vAudioLabel">1</span></button>
+              <div class="v-menu" id="vAudioMenu" hidden></div>
+            </div>
+            <div class="v-menu-wrap">
+              <button type="button" class="v-btn" id="vSpeedBtn" title="Velocidad"><svg class="ico"><use href="#i-gauge"/></svg><span id="vSpeedLabel">1x</span></button>
+              <div class="v-menu" id="vSpeedMenu" hidden>
+                <button type="button" class="v-menu-item" data-speed="0.75">0.75x</button>
+                <button type="button" class="v-menu-item active" data-speed="1">1x</button>
+                <button type="button" class="v-menu-item" data-speed="1.25">1.25x</button>
+                <button type="button" class="v-menu-item" data-speed="1.5">1.5x</button>
+                <button type="button" class="v-menu-item" data-speed="2">2x</button>
               </div>
             </div>
-
-            <!-- Selector integrado de Velocidad -->
-            <div class="v-menu-wrap">
-              <button type="button" class="v-btn" id="vSpeedBtn" onclick="togglePlayerPopup('vSpeedMenu')" title="Velocidad de reproducción">
-                ⚡ <span id="vSpeedBtnText">1x</span>
-              </button>
-              <div class="v-popup-menu" id="vSpeedMenu" style="min-width:130px;">
-                <div class="v-popup-title">⚡ Velocidad</div>
-                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(0.75)"><span>0.75x</span></button>
-                <button type="button" class="v-menu-item active" onclick="setPlayerSpeed(1)"><span>1x (Normal)</span></button>
-                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(1.25)"><span>1.25x</span></button>
-                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(1.5)"><span>1.5x</span></button>
-                <button type="button" class="v-menu-item" onclick="setPlayerSpeed(2)"><span>2x</span></button>
-              </div>
-            </div>
-
-            <button type="button" class="v-btn" onclick="togglePlayerFullscreen()" title="Pantalla completa (F)">⛶</button>
+            <button type="button" class="v-btn" id="vFull" title="Pantalla completa (F)"><svg class="ico"><use href="#i-expand"/></svg></button>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="player-modal-footer">
-      <div id="playerModeInfo">⚡ Streaming directo desde disco (0% CPU · 0 bytes extra)</div>
-      <div class="player-footer-actions">
-        <a id="playerVlcBtn" href="#" class="btn-warning btn-sm" style="text-decoration:none;">🟠 Abrir en VLC</a>
-        <button type="button" class="btn-secondary btn-sm" onclick="copyCurrentStreamUrl()">🔗 Copiar URL Stream</button>
-        <a id="playerDownloadBtn" href="#" class="btn-success btn-sm" style="text-decoration:none;">⬇️ Descargar</a>
+    <div class="player-foot">
+      <span class="muted small" id="playerMode"></span>
+      <div class="player-actions">
+        <a class="btn btn-ghost btn-sm" id="playerVlc" href="#"><svg class="ico"><use href="#i-external"/></svg><span>Abrir en VLC</span></a>
+        <button type="button" class="btn btn-ghost btn-sm" id="playerCopy"><svg class="ico"><use href="#i-copy"/></svg><span>Copiar enlace</span></button>
+        <a class="btn btn-ghost btn-sm" id="playerDownload" href="#"><svg class="ico"><use href="#i-download"/></svg><span>Descargar</span></a>
       </div>
     </div>
   </div>

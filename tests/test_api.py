@@ -9,8 +9,11 @@ FMT = "%Y-%m-%dT%H:%M:%S"
 
 def test_index_and_static(client):
     r = client.get("/")
+    html = r.get_data(as_text=True)
     assert r.status_code == 200
-    assert "Lista cargada con 3 canales" in r.get_data(as_text=True)
+    assert 'id="channelGrid"' in html and 'id="libraryGrid"' in html
+    # Los estáticos llevan una versión que cambia con el archivo (sin cachés viejas tras actualizar)
+    assert "/static/js/app.js?v=" in html
     assert client.get("/static/js/app.js").status_code == 200
 
 

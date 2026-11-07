@@ -59,8 +59,11 @@ def test_immediate_recording(client, services, stream_url, fmt):
     out = services.settings.output_dir
     assert media.probe_duration(os.path.join(out, entry["filename"])) >= 4
     # Ni temporales ni fragmentos sueltos
-    assert sorted(f for f in os.listdir(out) if not f.endswith(".json")) == [f"prueba.{fmt}"]
+    assert sorted(f for f in os.listdir(out) if not f.endswith(".json") and not f.startswith(".")) == [f"prueba.{fmt}"]
     assert services.recorder.status["last_result"]["status"] == "ok"
+    # Miniatura generada al terminar, servida por la API
+    r = client.get(f"/thumb/prueba.{fmt}")
+    assert r.status_code == 200 and r.mimetype == "image/jpeg"
 
 
 @needs_ffmpeg
