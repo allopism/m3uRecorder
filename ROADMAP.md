@@ -24,7 +24,7 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 1. [x] **Apagado limpio del contenedor.** Capturar `SIGTERM` para cerrar ffmpeg
        bien al hacer `docker stop`. Hoy Python ignora la señal y Docker acaba
        matando ffmpeg a la fuerza → el MP4 queda corrupto.
-2. [ ] **Grabar en formato resistente a cortes.** Grabar internamente en `.ts`
+2. [x] **Grabar en formato resistente a cortes.** Grabar internamente en `.ts`
        y convertir al formato pedido al terminar (sin recodificar). Así, pase lo
        que pase, el archivo siempre se puede reproducir.
 3. [ ] **Nombres con apóstrofo** ("Grey's Anatomy") rompen los botones Ver/Borrar.
@@ -37,15 +37,19 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
        un hilo aparte.
 8. [ ] **VPN opcional y rápida:** variable `VPN_ENABLED`; si Gluetun no responde,
        `/status` no debe tardar segundos.
-9. [ ] **Unión de fragmentos:** sin timeout fijo de 120 s y sin dejar `.partN`
-       huérfanos si falla.
+9. [x] **Unión de fragmentos:** sin timeout fijo de 120 s y sin dejar `.partN`
+       huérfanos si falla (resuelto junto con el punto 2).
+10. [ ] **Programaciones en el pasado:** hoy se aceptan sin error y luego fallan
+        con "Tiempo expirado". Rechazarlas al crearlas si la hora de fin ya pasó.
 
 ## Fase 2 — Seguridad (imprescindible antes de publicar)
 
 1. [ ] **Autenticación por token** (`APP_TOKEN` en `.env`): login sencillo en la
        web y cabecera `Authorization` para la app Android.
 2. [ ] **Lista blanca de protocolos** para la URL (`http`, `https`, `rtmp`,
-       `rtsp`, `udp`…) y de formatos de salida (`mp4`, `mkv`, `ts`…).
+       `rtsp`, `udp`…) y de formatos de salida (`mp4`, `mkv`, `ts`…). Quitar `webm`
+       de la interfaz: sin recodificar nunca funciona con canales H.264/AAC (hoy
+       acaba guardándose en `.ts`).
 3. [ ] **Servidor de producción** (waitress) en lugar del servidor de desarrollo.
 4. [ ] **Dockerfile:** usuario no-root, `HEALTHCHECK`, no copiar `vpn/` ni la
        lista; leer los países desde el volumen de Gluetun.
@@ -71,6 +75,8 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 ## Fase 5 — Funcionalidad (opcional, cuando todo lo anterior esté)
 
 - [ ] Comprobación de espacio en disco + borrado automático de lo antiguo.
+- [ ] Recuperar al arrancar los `.rec.ts` que deje un corte brusco (convertirlos y
+      añadirlos al historial). Hoy se conservan y se pueden reproducir, pero a mano.
 - [ ] Progreso real de la grabación (`ffmpeg -progress`).
 - [ ] Importar listas M3U por URL (p. ej. directamente de iptv-org) y guía EPG (XMLTV).
 - [ ] Varias grabaciones a la vez (si comparten país de VPN).

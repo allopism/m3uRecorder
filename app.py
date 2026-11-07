@@ -656,13 +656,26 @@ def get_media_duration_seconds(path: str) -> int:
 # ─────────────────────────────────────────────
 #  Core de Grabación (FFmpeg + Resiliencia VPN)
 # ─────────────────────────────────────────────
-def _build_ffmpeg_cmd(url, duration_str, filepath, format_ext):
-    format_map = {
-        'mp4': 'mp4', 'mkv': 'matroska', 'ts': 'mpegts',
-        'avi': 'avi', 'webm': 'webm'
-    }
-    fformat = format_map.get(format_ext, 'mp4')
+FORMAT_MUXERS = {
+    'mp4': 'mp4', 'mkv': 'matroska', 'ts': 'mpegts',
+    'avi': 'avi'
+}
 
+
+def _segment_path(filepath, attempt):
+    """
+    Archivo intermedio de cada intento de grabación. Siempre es MPEG-TS porque,
+    a diferencia del MP4, sigue siendo reproducible aunque la grabación se corte
+    de golpe (apagón, SIGKILL, disco lleno...). Al terminar se convierte al
+    formato pedido con _finalize_recording().
+    """
+    if attempt == 1:
+        return f"{filepath}.rec.ts"
+    return f"{filepath}.part{attempt}.ts"
+
+
+def _build_ffmpeg_cmd(url, duration_str, segment_path, format_ext):
+    """Comando de grabación: copia el stream sin recodificar a un .ts intermedio."""
     cmd = ['ffmpeg', '-y', '-nostdin', '-hide_banner']
 
     if url.lower().startswith(('http://', 'https://')):
@@ -679,6 +692,7 @@ def _build_ffmpeg_cmd(url, duration_str, filepath, format_ext):
         '-map', '0:a?'
     ])
 
+    # Subtítulos solo si el formato final los admite (MP4 no acepta los de TV)
     if format_ext in ('mkv', 'ts'):
         cmd.extend(['-map', '0:s?'])
 
@@ -686,8 +700,8 @@ def _build_ffmpeg_cmd(url, duration_str, filepath, format_ext):
         '-dn',
         '-c', 'copy',
         '-t', duration_str,
-        '-f', fformat,
-        filepath
+        '-f', 'mpegts',
+        segment_path
     ])
     return cmd
 
@@ -758,55 +772,114 @@ def _run_ffmpeg_process(cmd, requested_sec, prefix=""):
     return proc, timed_out.is_set()
 
 
-def _merge_segments_lossless(segment_files, final_filepath, format_ext):
-    valid_segments = [p for p in segment_files if os.path.exists(p) and os.path.getsize(p) > 0]
-    if not valid_segments:
-        return False
-    if len(valid_segments) == 1:
-        if valid_segments[0] != final_filepath:
-            os.replace(valid_segments[0], final_filepath)
-        return True
-
-    concat_list_path = final_filepath + ".concat.txt"
-    temp_merged = final_filepath + f".merged.{format_ext}"
+def _remove_quietly(path):
     try:
-        with open(concat_list_path, "w", encoding="utf-8") as f:
-            for seg in valid_segments:
-                escaped = os.path.abspath(seg).replace("'", "'\\''")
-                f.write(f"file '{escaped}'\n")
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
 
-        cmd = [
-            "ffmpeg", "-y", "-nostdin", "-hide_banner",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_list_path,
-            "-c", "copy",
-            temp_merged
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=OUTPUT_DIR, timeout=120)
-        if res.returncode == 0 and os.path.exists(temp_merged) and os.path.getsize(temp_merged) > 0:
-            os.replace(temp_merged, final_filepath)
-            for seg in valid_segments:
-                if seg != final_filepath and os.path.exists(seg):
-                    try:
-                        os.remove(seg)
-                    except Exception:
-                        pass
-            return True
+
+def _remux_segments(segments, out_path, format_ext):
+    """
+    Une uno o varios .ts y los convierte al formato pedido copiando los streams
+    (sin recodificar, así que es rápido y no pierde calidad). Escribe primero en
+    un archivo temporal y solo lo renombra al final si todo salió bien.
+    Devuelve (ok, mensaje_error).
+    """
+    muxer = FORMAT_MUXERS.get(format_ext, 'mp4')
+    tmp_out = out_path + ".tmp"
+    concat_list = out_path + ".concat.txt"
+    cmd = ["ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error"]
+    try:
+        if len(segments) == 1:
+            cmd += ["-i", segments[0]]
         else:
-            largest = max(valid_segments, key=lambda p: os.path.getsize(p))
-            if largest != final_filepath:
-                os.replace(largest, final_filepath)
-            return False
+            with open(concat_list, "w", encoding="utf-8") as f:
+                for seg in segments:
+                    escaped = os.path.abspath(seg).replace("'", "'\''")
+                    f.write(f"file '{escaped}'\n")
+            cmd += ["-f", "concat", "-safe", "0", "-i", concat_list]
+
+        cmd += ["-map", "0:v?", "-map", "0:a?"]
+        if format_ext in ('mkv', 'ts'):
+            cmd += ["-map", "0:s?"]
+        cmd += ["-dn", "-c", "copy"]
+        if format_ext == 'mp4':
+            # Índice al principio: el navegador puede empezar a reproducir sin descargarlo entero
+            cmd += ["-movflags", "+faststart"]
+        cmd += ["-f", muxer, tmp_out]
+
+        # Margen generoso según tamaño (mínimo 10 min, ~10 MB/s de disco en el peor caso)
+        total_bytes = sum(os.path.getsize(s) for s in segments)
+        timeout = 600 + total_bytes // (10 * 1024 * 1024)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors='replace', cwd=OUTPUT_DIR, timeout=timeout)
+        if res.returncode == 0 and os.path.exists(tmp_out) and os.path.getsize(tmp_out) > 0:
+            os.replace(tmp_out, out_path)
+            return True, ""
+        return False, (res.stderr or "").strip()[-300:] or f"ffmpeg_return={res.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "tiempo de conversión agotado"
     except Exception as e:
-        sys_log(f"Error uniendo segmentos: {e}")
-        return False
+        return False, str(e)
     finally:
-        for p in (concat_list_path, temp_merged):
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+        _remove_quietly(tmp_out)
+        _remove_quietly(concat_list)
+
+
+def _finalize_recording(segment_files, final_filepath, format_ext):
+    """
+    Convierte los .ts intermedios en el archivo final. Regla de oro: un .ts no se
+    borra hasta que su contenido está a salvo en el archivo final, así que pase lo
+    que pase la grabación nunca se pierde.
+
+    Devuelve (ruta_final, aviso). La ruta puede acabar en .ts si la conversión
+    falla; el aviso explica qué ocurrió ("" si todo fue bien).
+    """
+    valid = [p for p in segment_files if os.path.exists(p) and os.path.getsize(p) > 0]
+    for p in segment_files:
+        if p not in valid:
+            _remove_quietly(p)
+    if not valid:
+        return final_filepath, ""
+
+    ok, err = _remux_segments(valid, final_filepath, format_ext)
+    if ok:
+        for seg in valid:
+            _remove_quietly(seg)
+        return final_filepath, ""
+
+    sys_log(f"Aviso: no se pudo generar {os.path.basename(final_filepath)} ({len(valid)} fragmento/s): {err}")
+
+    if len(valid) > 1:
+        # Puede pasar si el canal cambió de resolución o códec al reconectar.
+        # Nos quedamos con el fragmento más largo y conservamos el resto en .ts.
+        largest = max(valid, key=os.path.getsize)
+        ok, err = _remux_segments([largest], final_filepath, format_ext)
+        if ok:
+            _remove_quietly(largest)
+            rest = [os.path.basename(p) for p in valid if p != largest]
+            return final_filepath, ("No se pudieron unir los fragmentos; se guardó el más largo. "
+                                    f"Resto conservado en: {', '.join(rest)}")
+
+    # Último recurso: dejar la grabación en .ts (MPEG-TS admite unir archivos byte a byte)
+    base = os.path.splitext(os.path.basename(final_filepath))[0]
+    ts_path = os.path.join(OUTPUT_DIR, ensure_unique_filename(base, "ts"))
+    try:
+        if len(valid) == 1:
+            os.replace(valid[0], ts_path)
+        else:
+            with open(ts_path, "wb") as out:
+                for seg in valid:
+                    with open(seg, "rb") as src:
+                        shutil.copyfileobj(src, out, 4 * 1024 * 1024)
+            for seg in valid:
+                _remove_quietly(seg)
+    except Exception as e:
+        sys_log(f"Error guardando la grabación en .ts: {e}")
+        return valid[0], f"No se pudo convertir a {format_ext}; grabación conservada en {os.path.basename(valid[0])}"
+    return ts_path, f"No se pudo convertir a {format_ext}; grabación guardada en .ts"
 
 
 def _evaluate_recording(returncodes, filepath, duration_str, was_stopped=False):
@@ -931,7 +1004,7 @@ def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", re
                 break
 
             attempt += 1
-            seg_path = filepath if attempt == 1 else f"{filepath}.part{attempt}.{format_ext}"
+            seg_path = _segment_path(filepath, attempt)
             seg_dur_str = seconds_to_hhmmss(remaining_media_sec)
             cmd = _build_ffmpeg_cmd(url, seg_dur_str, seg_path, format_ext)
 
@@ -971,11 +1044,9 @@ def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", re
 
             time.sleep(4)
 
-        if len(segment_files) > 1:
-            status['progress'] = "Uniendo fragmentos de grabación..."
-            _merge_segments_lossless(segment_files, filepath, format_ext)
-        elif len(segment_files) == 1 and segment_files[0] != filepath:
-            os.replace(segment_files[0], filepath)
+        status['progress'] = f"Guardando grabación en {format_ext.upper()}..."
+        filepath, finalize_note = _finalize_recording(segment_files, filepath, format_ext)
+        filename = os.path.basename(filepath)
 
         end_dt = now_local()
         elapsed_real_sec = real_seconds_between(start_dt, end_dt)
@@ -986,7 +1057,7 @@ def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", re
         if media_duration_sec == 0 and filesize_bytes > 0:
             media_duration_sec = elapsed_real_sec
 
-        reason_str = "; ".join(reasons)
+        reason_str = "; ".join(reasons + ([finalize_note] if finalize_note else []))
         sys_log(f"Finalizada Inmediata: {filename} | Estado: {status_rec} | Tamaño: {human_size(filesize_bytes)} | Detalles: {reason_str}")
 
         final_progress_msg = ""
@@ -1127,7 +1198,7 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
 
             attempt += 1
             ffmpeg_target_sec = remaining_wall_sec + IPTV_BUFFER_PADDING_SEC
-            seg_path = filepath if attempt == 1 else f"{filepath}.part{attempt}.{job['format']}"
+            seg_path = _segment_path(filepath, attempt)
             seg_dur_str = seconds_to_hhmmss(ffmpeg_target_sec)
             cmd = _build_ffmpeg_cmd(job['url'], seg_dur_str, seg_path, job['format'])
 
@@ -1165,11 +1236,9 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
 
             time.sleep(5)
 
-        if len(segment_files) > 1:
-            status['progress'] = "[Programada] Uniendo segmentos..."
-            _merge_segments_lossless(segment_files, filepath, job['format'])
-        elif len(segment_files) == 1 and segment_files[0] != filepath:
-            os.replace(segment_files[0], filepath)
+        status['progress'] = f"[Programada] Guardando grabación en {job['format'].upper()}..."
+        filepath, finalize_note = _finalize_recording(segment_files, filepath, job['format'])
+        job['filename'] = os.path.basename(filepath)
 
         end_dt = now_local()
         elapsed_real_sec = real_seconds_between(start_dt, end_dt)
@@ -1180,7 +1249,7 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
         if media_duration_sec == 0 and filesize_bytes > 0:
             media_duration_sec = elapsed_real_sec
 
-        reason_str = "; ".join(reasons)
+        reason_str = "; ".join(reasons + ([finalize_note] if finalize_note else []))
         sys_log(f"Finalizada Programada: {job['filename']} | Estado: {status_rec} | Tamaño: {human_size(filesize_bytes)} | Detalles: {reason_str}")
 
         job['status'] = status_rec
@@ -2638,7 +2707,6 @@ HTML_TEMPLATE = r'''
                 <option value="mkv">MKV (.mkv) — Soporta subtítulos DVB y multipista</option>
                 <option value="ts">MPEG-TS (.ts) — Volcado puro de transporte</option>
                 <option value="avi">AVI (.avi)</option>
-                <option value="webm">WebM (.webm)</option>
               </select>
             </div>
           </div>
@@ -2738,7 +2806,6 @@ HTML_TEMPLATE = r'''
                 <option value="mkv">MKV (.mkv)</option>
                 <option value="ts">MPEG-TS (.ts)</option>
                 <option value="avi">AVI (.avi)</option>
-                <option value="webm">WebM (.webm)</option>
               </select>
             </div>
             <div class="form-group">
