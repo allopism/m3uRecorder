@@ -36,6 +36,7 @@ services:
     container_name: m3u-recorder
     environment:
       - TZ=${TZ:-Europe/Madrid}
+      - VPN_ENABLED=${VPN_ENABLED:-true}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:

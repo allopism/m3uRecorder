@@ -17,7 +17,7 @@ etiqueta `v0-funcional` (estado original que funcionaba).
 - [x] `docker-compose.yml` con Gluetun + recorder (rutas relativas, versión de Gluetun fijada)
 - [x] `.env.example` con todas las variables
 
-## Fase 1 — Bugs (lo que hoy puede fallar sin que te des cuenta)
+## Fase 1 — Bugs (lo que hoy puede fallar sin que te des cuenta) ✅
 
 Ordenados por impacto. Ninguno cambia cómo se usa la app.
 
@@ -27,29 +27,33 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 2. [x] **Grabar en formato resistente a cortes.** Grabar internamente en `.ts`
        y convertir al formato pedido al terminar (sin recodificar). Así, pase lo
        que pase, el archivo siempre se puede reproducir.
-3. [ ] **Nombres con apóstrofo** ("Grey's Anatomy") rompen los botones Ver/Borrar.
+3. [x] **Nombres con apóstrofo** ("Grey's Anatomy") rompen los botones Ver/Borrar.
        Sustituir los `onclick="...('nombre')"` por atributos `data-*` + listeners.
-4. [ ] **Doble grabación simultánea.** Reservar el grabador dentro de un lock en
+4. [x] **Doble grabación simultánea.** Reservar el grabador dentro de un lock en
        `/record`, no dentro del hilo (doble clic o web + Android a la vez).
-5. [ ] **Texto de ffmpeg sin escapar** en la página inicial.
-6. [ ] **No permitir borrar** el archivo que se está grabando.
-7. [ ] **Programador no bloqueante:** el pre-cambio de VPN (hasta 28 s) pasa a
+5. [x] **Texto de ffmpeg sin escapar** en la página inicial.
+6. [x] **No permitir borrar** el archivo que se está grabando, ni archivos que no
+       sean vídeos (antes una URL podía borrar `schedules.json` y perder todas las
+       programaciones).
+7. [x] **Programador no bloqueante:** el pre-cambio de VPN (hasta 28 s) pasa a
        un hilo aparte.
-8. [ ] **VPN opcional y rápida:** variable `VPN_ENABLED`; si Gluetun no responde,
+8. [x] **VPN opcional y rápida:** variable `VPN_ENABLED`; si Gluetun no responde,
        `/status` no debe tardar segundos.
 9. [x] **Unión de fragmentos:** sin timeout fijo de 120 s y sin dejar `.partN`
        huérfanos si falla (resuelto junto con el punto 2).
-10. [ ] **Programaciones en el pasado:** hoy se aceptan sin error y luego fallan
+10. [x] **Programaciones en el pasado:** hoy se aceptan sin error y luego fallan
         con "Tiempo expirado". Rechazarlas al crearlas si la hora de fin ya pasó.
+11. [x] **Colchón de 35 s en programadas:** dos programaciones seguidas se pisaban
+        y la segunda podía perderse entera. Ahora se mantiene el colchón, pero si
+        otra programada empieza justo después, se corta a la hora exacta y se le
+        cede el grabador.
 
 ## Fase 2 — Seguridad (imprescindible antes de publicar)
 
 1. [ ] **Autenticación por token** (`APP_TOKEN` en `.env`): login sencillo en la
        web y cabecera `Authorization` para la app Android.
 2. [ ] **Lista blanca de protocolos** para la URL (`http`, `https`, `rtmp`,
-       `rtsp`, `udp`…) y de formatos de salida (`mp4`, `mkv`, `ts`…). Quitar `webm`
-       de la interfaz: sin recodificar nunca funciona con canales H.264/AAC (hoy
-       acaba guardándose en `.ts`).
+       `rtsp`, `udp`…). La de formatos ya está hecha (y WebM eliminado).
 3. [ ] **Servidor de producción** (waitress) en lugar del servidor de desarrollo.
 4. [ ] **Dockerfile:** usuario no-root, `HEALTHCHECK`, no copiar `vpn/` ni la
        lista; leer los países desde el volumen de Gluetun.
@@ -61,7 +65,9 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 1. [ ] Sacar el HTML/CSS/JS a `templates/` y `static/` (≈2.750 líneas fuera de `app.py`).
 2. [ ] Dividir el backend en módulos: `recorder`, `scheduler`, `vpn`, `storage`, `api`.
 3. [ ] Unificar grabación inmediata y programada (una inmediata = programada que
-       empieza ya) → eliminar ~200 líneas duplicadas.
+       empieza ya) → eliminar ~200 líneas duplicadas. De paso, liberar el grabador
+       antes de la conversión final: hoy la siguiente programada espera a que
+       termine (segundos en grabaciones cortas, más en las de varias horas).
 4. [ ] Eliminar el cálculo manual de cambio de hora (ya lo resuelve `zoneinfo` + `tzdata`).
 5. [ ] Tests con pytest: tiempos y DST, solapes, evaluación de grabaciones, rutas.
 6. [ ] CI con GitHub Actions (tests + lint + build de la imagen).

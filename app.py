@@ -14,6 +14,7 @@ import shutil
 import urllib.request
 import urllib.parse
 import urllib.error
+from html import escape as html_escape
 
 try:
     from zoneinfo import ZoneInfo
@@ -32,6 +33,9 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 TZ_NAME = os.environ.get("TZ", "Europe/Madrid")
 GLUETUN_CONTROL_URL = os.environ.get("GLUETUN_CONTROL_URL", "http://127.0.0.1:8000").rstrip("/")
+# Pon VPN_ENABLED=false para usar la app sin Gluetun (se ocultan los controles de VPN)
+VPN_ENABLED = os.environ.get("VPN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+VPN_REFRESH_SEC = 5
 
 SCHEDULE_START_TOLERANCE = 120  # segundos de margen si otra grabación está terminando
 IPTV_BUFFER_PADDING_SEC = 35    # segundos extra en programadas para compensar el buffer inicial del servidor IPTV
@@ -48,6 +52,7 @@ vpn_countries_list = []
 
 state_lock = threading.Lock()
 vpn_lock = threading.Lock()
+recorder_lock = threading.Lock()  # protege la reserva del grabador (solo una grabación a la vez)
 current_proc = None
 stop_requested = False
 shutdown_requested = False  # True cuando Docker pide apagar el contenedor (SIGTERM)
@@ -64,6 +69,7 @@ vpn_state_cache = {
     "default_country": "",
     "provider": "protonvpn",
     "switching": False,
+    "enabled": VPN_ENABLED,
 }
 
 # Países destacados con traducción y bandera para mostrar primero en los selectores
@@ -295,19 +301,32 @@ def _gluetun_request(method: str, path: str, payload=None, timeout: float = 4.0)
 
 
 def get_gluetun_info(force: bool = False) -> dict:
-    """Obtiene el estado actual de la VPN, IP pública y país configurado en Gluetun (con caché de 4s)."""
-    now_ts = time.monotonic()
-    if not force and (now_ts - vpn_state_cache["last_fetch"] < 4.0) and vpn_state_cache["last_fetch"] > 0:
+    """
+    Estado de la VPN (IP pública, país...). Sin force devuelve al instante la caché,
+    que refresca en segundo plano vpn_monitor_loop(); así /status nunca se queda
+    esperando a Gluetun. Con force consulta a Gluetun en el momento.
+    """
+    if not VPN_ENABLED:
+        return dict(vpn_state_cache)
+    if not force and vpn_state_cache["last_fetch"] > 0:
         return dict(vpn_state_cache)
 
+    now_ts = time.monotonic()
     try:
         ip_info = _gluetun_request("GET", "/v1/publicip/ip", timeout=2.5)
         vpn_state_cache["available"] = True
         vpn_state_cache["public_ip"] = ip_info.get("public_ip", "") or ""
         vpn_state_cache["ip_country"] = str(ip_info.get("country", "") or "").strip().title()
         vpn_state_cache["ip_city"] = ip_info.get("city", "") or ""
+    except urllib.error.HTTPError:
+        # Gluetun responde pero aún no tiene IP (p. ej. reconectando): seguimos consultando el resto
+        vpn_state_cache["public_ip"] = ""
     except Exception:
+        # Gluetun no responde: no tiene sentido esperar a las otras dos consultas
         vpn_state_cache["available"] = False
+        vpn_state_cache["public_ip"] = ""
+        vpn_state_cache["last_fetch"] = now_ts
+        return dict(vpn_state_cache)
 
     try:
         st_info = _gluetun_request("GET", "/v1/vpn/status", timeout=2.0)
@@ -336,6 +355,17 @@ def get_gluetun_info(force: bool = False) -> dict:
     return dict(vpn_state_cache)
 
 
+def vpn_monitor_loop():
+    """Refresca el estado de la VPN cada pocos segundos en segundo plano."""
+    while True:
+        if not vpn_state_cache["switching"]:
+            try:
+                get_gluetun_info(force=True)
+            except Exception:
+                pass
+        time.sleep(VPN_REFRESH_SEC)
+
+
 def switch_gluetun_country(target_country: str, wait_ready: bool = True, timeout_sec: int = 28):
     """
     Cambia el país activo en Gluetun mediante PUT /v1/vpn/settings y espera
@@ -344,6 +374,8 @@ def switch_gluetun_country(target_country: str, wait_ready: bool = True, timeout
     target_country = (target_country or "").strip()
     if not target_country:
         return True, "Sin cambio de país requerido"
+    if not VPN_ENABLED:
+        return False, "La VPN está desactivada (VPN_ENABLED=false)"
 
     with vpn_lock:
         info = get_gluetun_info(force=True)
@@ -660,6 +692,8 @@ FORMAT_MUXERS = {
     'mp4': 'mp4', 'mkv': 'matroska', 'ts': 'mpegts',
     'avi': 'avi'
 }
+# Extensiones que se consideran grabaciones (incluye .webm por si quedan archivos antiguos)
+MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.ts', '.avi', '.webm'}
 
 
 def _segment_path(filepath, attempt):
@@ -704,6 +738,19 @@ def _build_ffmpeg_cmd(url, duration_str, segment_path, format_ext):
         segment_path
     ])
     return cmd
+
+
+def try_reserve_recorder() -> bool:
+    """
+    Marca el grabador como ocupado de forma atómica. Comprobar y marcar dentro del
+    mismo lock evita que dos peticiones casi simultáneas (doble clic, web + app
+    Android, o una programada que arranca justo a la vez) lancen dos ffmpeg.
+    """
+    with recorder_lock:
+        if status['running'] or shutdown_requested:
+            return False
+        status['running'] = True
+        return True
 
 
 def _signal_ffmpeg_stop():
@@ -916,11 +963,14 @@ def _prepare_recording_vpn(target_country: str):
     el país anterior para poder restaurarlo al terminar.
     """
     target_country = (target_country or "").strip()
+    if not target_country:
+        return "", False
+    if not VPN_ENABLED:
+        sys_log(f"VPN desactivada: se ignora el país '{target_country}' pedido para la grabación")
+        return "", False
+
     info = get_gluetun_info(force=True)
     previous_country = info.get("configured_country") or info.get("default_country") or ""
-
-    if not target_country:
-        return previous_country, False
 
     if previous_country.lower() == target_country.lower() and info.get("public_ip"):
         return previous_country, False
@@ -1144,6 +1194,44 @@ def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", re
         stop_requested = False
 
 
+def _next_pending_job_due(current_job, horizon_sec=3):
+    """Devuelve otra programada pendiente que empieza ya (o en los próximos segundos)."""
+    now = now_utc()
+    for j in scheduled_jobs:
+        if j is current_job or j.get('status') != 'pending':
+            continue
+        try:
+            if (to_utc(j['start_time']) - now).total_seconds() <= horizon_sec:
+                return j
+        except Exception:
+            pass
+    return None
+
+
+def _handover_watcher(job, end_target_utc, handover, proc_done):
+    """
+    Las programadas graban IPTV_BUFFER_PADDING_SEC de más tras su hora de fin para
+    compensar el retraso del servidor. Pero si justo después empieza otra
+    programada, ese colchón le robaría su comienzo: en ese caso cortamos aquí,
+    a la hora de fin exacta, y cedemos el grabador.
+    """
+    signaled_proc = None
+    while not proc_done.wait(1):
+        if not handover.is_set():
+            if now_utc() < end_target_utc:
+                continue
+            nxt = _next_pending_job_due(job)
+            if nxt is None:
+                continue
+            sys_log(f"Colchón recortado: {job['filename']} cede el grabador a {nxt.get('filename')}")
+            handover.set()
+        # Avisar una sola vez a cada proceso ffmpeg (varias señales seguidas lo matan sin cerrar)
+        proc = current_proc
+        if proc is not None and proc is not signaled_proc:
+            signaled_proc = proc
+            _signal_ffmpeg_stop()
+
+
 def run_scheduled_ffmpeg(job, initial_duration_str):
     global status, history, scheduled_jobs, stop_requested
     # Limpia un "parar" antiguo, pero respeta un apagado que ya esté en curso
@@ -1154,6 +1242,12 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
     restore_vpn = bool(job.get('restore_vpn', True))
     status['vpn_country'] = req_vpn_country or None
     status['progress'] = f"[Programada] Preparando: {job['filename']}..."
+
+    # Si la preconexión VPN aún está en marcha, esperarla: si no, no sabríamos a qué
+    # país volver al terminar y la VPN se quedaría en el país de esta grabación.
+    preswitch_evt = vpn_preswitch_events.pop(job['id'], None)
+    if preswitch_evt is not None and not preswitch_evt.wait(timeout=45):
+        sys_log(f"Aviso: la preconexión VPN de {job['filename']} no terminó a tiempo")
 
     previous_country = job.get('_pre_switched_from') or ""
     did_switch_vpn = bool(job.get('_pre_switched_done', False))
@@ -1190,6 +1284,7 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
         segment_files = []
         returncodes = []
         attempt = 0
+        handover = threading.Event()  # se activa si cedemos el colchón a la siguiente programada
 
         while not stop_requested:
             remaining_wall_sec = int(round((end_target_utc - now_utc()).total_seconds()))
@@ -1209,7 +1304,14 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
                 status['progress'] = f"[Programada] Reconectando (#{attempt})..."
 
             attempt_start = time.monotonic()
-            proc, _ = _run_ffmpeg_process(cmd, ffmpeg_target_sec, prefix="[Programada] ")
+            proc_done = threading.Event()
+            threading.Thread(
+                target=_handover_watcher, args=(job, end_target_utc, handover, proc_done), daemon=True
+            ).start()
+            try:
+                proc, _ = _run_ffmpeg_process(cmd, ffmpeg_target_sec, prefix="[Programada] ")
+            finally:
+                proc_done.set()
             returncodes.append(proc.returncode)
 
             seg_media_sec = 0
@@ -1224,7 +1326,7 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
                 except Exception:
                     pass
 
-            if stop_requested:
+            if stop_requested or handover.is_set():
                 break
 
             if proc.returncode == 0 and seg_media_sec >= ffmpeg_target_sec - 3:
@@ -1352,6 +1454,24 @@ def run_scheduled_ffmpeg(job, initial_duration_str):
         stop_requested = False
 
 
+vpn_preswitch_events = {}  # job_id -> threading.Event que se activa al terminar la preconexión
+
+
+def _preswitch_vpn_for_job(job, country, done_evt):
+    """Conecta la VPN al país de una programada unos segundos antes de que empiece."""
+    try:
+        sys_log(f"Pre-conectando VPN a '{country}' antes de iniciar tarea programada {job['filename']}...")
+        prev_c, did_sw = _prepare_recording_vpn(country)
+        job['_pre_switched_from'] = prev_c
+        job['_pre_switched_done'] = did_sw
+        if not status['running']:
+            status['progress'] = f"🌍 VPN lista en {country} (esperando inicio de {job['filename']})"
+    except Exception as e:
+        sys_log(f"Error en la preconexión VPN de {job.get('filename')}: {e}")
+    finally:
+        done_evt.set()
+
+
 def scheduler_loop():
     global status
     sys_log(f"Servicio de programador (scheduler_loop) arrancado. Hora servidor: {now_local().isoformat()}")
@@ -1376,12 +1496,12 @@ def scheduler_loop():
 
             # Pre-conectar al país VPN 25 segundos antes de la hora de inicio si el grabador está libre
             req_vpn = (job.get('vpn_country') or '').strip()
-            if req_vpn and not status['running'] and 0 < secs_until_start <= 25 and not job.get('_pre_switched_done'):
-                sys_log(f"Pre-conectando VPN a '{req_vpn}' antes de iniciar tarea programada {job['filename']}...")
-                prev_c, did_sw = _prepare_recording_vpn(req_vpn)
-                job['_pre_switched_from'] = prev_c
-                job['_pre_switched_done'] = did_sw
-                status['progress'] = f"🌍 VPN lista en {req_vpn} (esperando inicio de {job['filename']})"
+            # (en un hilo aparte: el cambio puede tardar hasta ~28 s y no debe frenar al programador)
+            if (req_vpn and not status['running'] and 0 < secs_until_start <= 25
+                    and job['id'] not in vpn_preswitch_events and not job.get('_pre_switched_done')):
+                done_evt = threading.Event()
+                vpn_preswitch_events[job['id']] = done_evt
+                threading.Thread(target=_preswitch_vpn_for_job, args=(job, req_vpn, done_evt), daemon=True).start()
 
             if current_utc < start_utc:
                 continue
@@ -1408,12 +1528,11 @@ def scheduler_loop():
                 )
                 continue
 
-            if status['running']:
+            if not try_reserve_recorder():
                 continue
 
             sys_log(f"¡Hora alcanzada! Lanzando tarea programada: {job['filename']} (Duración real: {seconds_to_hhmmss(remaining_secs)})")
             job['status'] = 'running'
-            status['running'] = True
             changed = True
             save_schedules()
             duration_str = seconds_to_hhmmss(remaining_secs)
@@ -3528,7 +3647,14 @@ async function checkServerStatus() {
     const stopBtn = document.getElementById('globalStopBtn');
 
     // Actualizar Píldora VPN compacta en el Topbar y registrar IP en la consola inferior
-    if (data.vpn) {
+    if (data.vpn && data.vpn.enabled === false) {
+      // App sin Gluetun: ocultar todos los controles de VPN
+      document.getElementById('vpnPill').style.display = 'none';
+      ['rVpnCountry', 'sVpnCountry'].forEach(id => {
+        const group = document.getElementById(id)?.closest('.form-group');
+        if (group) group.style.display = 'none';
+      });
+    } else if (data.vpn) {
       const vDot  = document.getElementById('vpnDot');
       const vTxt  = document.getElementById('vpnStatusText');
       const vPill = document.getElementById('vpnPill');
@@ -3671,7 +3797,7 @@ async function loadHistory() {
 
     const hasFile = (Number(item.filesize_bytes) || 0) > 0;
     const playBtn = hasFile
-      ? `<button class="btn-primary btn-sm" title="Ver grabación aquí" onclick="openVideoPlayer('${escapeHtml(item.filename)}')">▶️ Ver</button> `
+      ? `<button class="btn-primary btn-sm" title="Ver grabación aquí" data-filename="${escapeHtml(item.filename)}" onclick="openVideoPlayer(this.dataset.filename)">▶️ Ver</button> `
       : '';
     const dlBtn = hasFile
       ? `<a href="/download/${encodeURIComponent(item.filename)}" class="btn-success btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;" title="Descargar">⬇️</a> `
@@ -3697,7 +3823,7 @@ async function loadHistory() {
       <td data-label="Estado">${statusBadge}</td>
       <td class="cell-actions" style="text-align:right;white-space:nowrap;">
         ${playBtn}${dlBtn}
-        <button class="btn-danger btn-sm" title="Eliminar grabación" onclick="deleteRecording('${escapeHtml(item.filename)}')">🗑️</button>
+        <button class="btn-danger btn-sm" title="Eliminar grabación" data-filename="${escapeHtml(item.filename)}" onclick="deleteRecording(this.dataset.filename)">🗑️</button>
       </td>
     `;
     body.appendChild(tr);
@@ -3826,7 +3952,7 @@ async function loadSchedules() {
       actions += `<button class="btn-danger btn-sm" title="Detener grabación en curso" onclick="stopRecord()">⏹️ Detener</button> `;
     } else {
       if (job.status === 'ok' || job.status === 'stopped') {
-        actions += `<button class="btn-primary btn-sm" title="Ver grabación" onclick="openVideoPlayer('${escapeHtml(job.filename)}')">▶️ Ver</button> `;
+        actions += `<button class="btn-primary btn-sm" title="Ver grabación" data-filename="${escapeHtml(job.filename)}" onclick="openVideoPlayer(this.dataset.filename)">▶️ Ver</button> `;
         actions += `<a href="/download/${encodeURIComponent(job.filename)}" class="btn-success btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;" title="Descargar">⬇️</a> `;
       }
       actions += `<button class="btn-danger btn-sm" title="Borrar registro" onclick="deleteSchedule('${job.id}')">🗑️</button>`;
@@ -4190,7 +4316,8 @@ document.addEventListener('keydown', e => {
 @app.route('/')
 def index():
     now_str = now_local().strftime('%Y%m%d_%H%M%S')
-    html = HTML_TEMPLATE.replace('READY_STATUS', status['progress'])
+    # El progreso incluye texto de ffmpeg (URL, metadatos del stream): escaparlo siempre
+    html = HTML_TEMPLATE.replace('READY_STATUS', html_escape(status['progress']))
     html = html.replace('NOWTS', now_str)
     html = html.replace('CHANNELS_COUNT', str(len(channels_db)))
 
@@ -4262,8 +4389,6 @@ def api_channels_reload():
 
 @app.route('/record', methods=['POST'])
 def record():
-    if status['running']:
-        return jsonify({'error': 'Ya hay una grabación en curso'}), 400
     url = request.form.get('url', '').strip()
     duration = request.form.get('duration', '').strip()
     raw_name = request.form.get('filename', '').strip()
@@ -4272,6 +4397,12 @@ def record():
 
     if not url or hhmmss_to_seconds(duration) <= 0:
         return jsonify({'error': 'URL o duración inválida'}), 400
+    if format_ext not in FORMAT_MUXERS:
+        return jsonify({'error': f'Formato no soportado: {format_ext}'}), 400
+
+    # Validar todo antes de reservar: si no, un error dejaría el grabador "ocupado"
+    if not try_reserve_recorder():
+        return jsonify({'error': 'Ya hay una grabación en curso'}), 400
 
     basename = sanitize_basename(raw_name, format_ext)
     filename = ensure_unique_filename(basename, format_ext)
@@ -4493,6 +4624,11 @@ def delete_recording(filename):
     global history
     safe_name = os.path.basename(filename)
     filepath = os.path.join(OUTPUT_DIR, safe_name)
+    # Solo vídeos: sin esto se podía borrar recordings.json o schedules.json desde la URL
+    if os.path.splitext(safe_name)[1].lower() not in MEDIA_EXTENSIONS:
+        return jsonify({'error': 'Solo se pueden borrar archivos de vídeo'}), 400
+    if status['running'] and status.get('filename') == safe_name:
+        return jsonify({'error': 'No se puede borrar una grabación en curso'}), 400
     if os.path.exists(filepath):
         try:
             os.remove(filepath)
@@ -4516,6 +4652,8 @@ def create_schedule():
 
     if not all([url, start_str, end_str, raw_name]):
         return jsonify({'error': 'Faltan campos obligatorios'}), 400
+    if format_ext not in FORMAT_MUXERS:
+        return jsonify({'error': f'Formato no soportado: {format_ext}'}), 400
 
     try:
         start_dt = resolve_local_datetime(start_str, fold=start_fold)
@@ -4534,6 +4672,10 @@ def create_schedule():
 
     s_utc = to_utc(start_dt)
     e_utc = to_utc(end_dt)
+    # Si el inicio ya pasó pero el fin no, se acepta y arranca en cuanto pueda.
+    # Si también pasó el fin, no tiene sentido crearla (antes se aceptaba y luego "fallaba").
+    if (e_utc - now_utc()).total_seconds() < 10:
+        return jsonify({'error': 'La hora de fin ya ha pasado'}), 400
     for existing in scheduled_jobs:
         if existing.get('status') in ('pending', 'running'):
             try:
@@ -4633,6 +4775,8 @@ load_history()
 load_schedules()
 load_notifications()
 threading.Thread(target=scheduler_loop, daemon=True).start()
+if VPN_ENABLED:
+    threading.Thread(target=vpn_monitor_loop, daemon=True).start()
 
 
 def _handle_shutdown(signum, frame):
