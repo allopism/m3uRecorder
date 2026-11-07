@@ -5,3 +5,6 @@ __pycache__
 output
 .env
 *.md
+# La lista se monta como volumen; no debe quedar dentro de la imagen
+*.m3u
+*.m3u8
