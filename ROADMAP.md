@@ -13,16 +13,15 @@ etiqueta `v0-funcional` (estado original que funcionaba).
 ## Fase 0 — Base del repositorio
 
 - [x] `.gitignore`, `.dockerignore`, `.gitattributes` (saltos de línea LF para Docker)
-- [ ] Commit inicial + etiqueta `v0-funcional`
-- [ ] `docker-compose.yml` con Gluetun + recorder (el montaje real que usas hoy)
-- [ ] `.env.example` con todas las variables (`OUTPUT_DIR`, `M3U_LIST_FILE`, `TZ`,
-      `GLUETUN_CONTROL_URL`, Telegram…)
+- [x] Commit inicial + etiqueta `v0-funcional`
+- [x] `docker-compose.yml` con Gluetun + recorder (rutas relativas, versión de Gluetun fijada)
+- [x] `.env.example` con todas las variables
 
 ## Fase 1 — Bugs (lo que hoy puede fallar sin que te des cuenta)
 
 Ordenados por impacto. Ninguno cambia cómo se usa la app.
 
-1. [ ] **Apagado limpio del contenedor.** Capturar `SIGTERM` para cerrar ffmpeg
+1. [x] **Apagado limpio del contenedor.** Capturar `SIGTERM` para cerrar ffmpeg
        bien al hacer `docker stop`. Hoy Python ignora la señal y Docker acaba
        matando ffmpeg a la fuerza → el MP4 queda corrupto.
 2. [ ] **Grabar en formato resistente a cortes.** Grabar internamente en `.ts`
@@ -50,7 +49,8 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 3. [ ] **Servidor de producción** (waitress) en lugar del servidor de desarrollo.
 4. [ ] **Dockerfile:** usuario no-root, `HEALTHCHECK`, no copiar `vpn/` ni la
        lista; leer los países desde el volumen de Gluetun.
-5. [ ] Proteger la API de control de Gluetun (hoy `auth = "none"`).
+5. [ ] Proteger la API de control de Gluetun (hoy `auth = "none"`). Riesgo bajo: el
+       puerto 8000 no se publica, solo es accesible desde la red compartida.
 
 ## Fase 3 — Estructura del código (lo que más luce en el portfolio)
 

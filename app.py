@@ -35,6 +35,9 @@ GLUETUN_CONTROL_URL = os.environ.get("GLUETUN_CONTROL_URL", "http://127.0.0.1:80
 
 SCHEDULE_START_TOLERANCE = 120  # segundos de margen si otra grabación está terminando
 IPTV_BUFFER_PADDING_SEC = 35    # segundos extra en programadas para compensar el buffer inicial del servidor IPTV
+# Segundos máximos que esperamos a que la grabación se cierre al apagar el contenedor.
+# Debe ser menor que el stop_grace_period de docker-compose (60s).
+SHUTDOWN_GRACE_SEC = int(os.environ.get("SHUTDOWN_GRACE_SEC", "45"))
 
 history = []
 scheduled_jobs = []
@@ -47,6 +50,7 @@ state_lock = threading.Lock()
 vpn_lock = threading.Lock()
 current_proc = None
 stop_requested = False
+shutdown_requested = False  # True cuando Docker pide apagar el contenedor (SIGTERM)
 
 # Caché y estado de Gluetun VPN
 vpn_state_cache = {
@@ -688,6 +692,28 @@ def _build_ffmpeg_cmd(url, duration_str, filepath, format_ext):
     return cmd
 
 
+def _signal_ffmpeg_stop():
+    """
+    Pide a ffmpeg que termine cerrando bien el archivo (equivale a pulsar 'q').
+    Con SIGINT ffmpeg escribe el índice final del MP4; si se le mata a la fuerza,
+    el MP4 queda sin índice y no se puede reproducir.
+    """
+    proc = current_proc
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        if os.name == 'nt':
+            proc.terminate()
+        else:
+            proc.send_signal(signal.SIGINT)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    return True
+
+
 def _run_ffmpeg_process(cmd, requested_sec, prefix=""):
     global current_proc, status
     proc = subprocess.Popen(
@@ -696,6 +722,9 @@ def _run_ffmpeg_process(cmd, requested_sec, prefix=""):
     )
     current_proc = proc
     status['pid'] = proc.pid
+    # Si se pidió parar justo mientras arrancaba ffmpeg, avisarle ya
+    if stop_requested:
+        _signal_ffmpeg_stop()
 
     proc_start_monotonic = time.monotonic()
     max_allowed_sec = max(30, requested_sec + 90)
@@ -790,7 +819,9 @@ def _evaluate_recording(returncodes, filepath, duration_str, was_stopped=False):
     ok_size = filesize_bytes > 0
 
     if was_stopped and ok_size:
-        return "stopped", ["Detenida manualmente por el usuario"], filesize_bytes, media_duration_sec
+        reason = ("Detenida por apagado o reinicio del servidor" if shutdown_requested
+                  else "Detenida manualmente por el usuario")
+        return "stopped", [reason], filesize_bytes, media_duration_sec
 
     ok_duration = requested_sec > 0 and media_duration_sec >= requested_sec * 0.85
     last_rc = returncodes[-1] if returncodes else -1
@@ -831,6 +862,9 @@ def _prepare_recording_vpn(target_country: str):
 def _restore_recording_vpn(previous_country: str, did_switch: bool, restore_requested: bool):
     if not did_switch or not restore_requested or not previous_country:
         return
+    # Al apagar no hay tiempo (ni sentido) para reconectar la VPN: Gluetun también se va a parar
+    if shutdown_requested:
+        return
     # No restaurar si hay otra grabación programada a punto de arrancar en los próximos 60s
     current_u = now_utc()
     for j in scheduled_jobs:
@@ -850,7 +884,8 @@ def _restore_recording_vpn(previous_country: str, did_switch: bool, restore_requ
 # ─────────────────────────────────────────────
 def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", restore_vpn=True):
     global status, history, stop_requested
-    stop_requested = False
+    # Limpia un "parar" antiguo, pero respeta un apagado que ya esté en curso
+    stop_requested = shutdown_requested
     status['running'] = True
     status['mode'] = 'immediate'
     status['filename'] = filename
@@ -1040,7 +1075,8 @@ def run_ffmpeg(url, duration, filename, format_ext, filepath, vpn_country="", re
 
 def run_scheduled_ffmpeg(job, initial_duration_str):
     global status, history, scheduled_jobs, stop_requested
-    stop_requested = False
+    # Limpia un "parar" antiguo, pero respeta un apagado que ya esté en curso
+    stop_requested = shutdown_requested
     status['mode'] = 'scheduled'
     status['filename'] = job['filename']
     req_vpn_country = (job.get('vpn_country') or '').strip()
@@ -1252,6 +1288,8 @@ def scheduler_loop():
     sys_log(f"Servicio de programador (scheduler_loop) arrancado. Hora servidor: {now_local().isoformat()}")
     while True:
         time.sleep(2)
+        if shutdown_requested:
+            continue  # no lanzar nada nuevo mientras el contenedor se apaga
         current_utc = now_utc()
         changed = False
 
@@ -4183,21 +4221,10 @@ def record():
 
 @app.route('/stop', methods=['POST'])
 def stop():
-    global stop_requested, current_proc
+    global stop_requested
     stop_requested = True
     pid = status.get('pid')
-    proc = current_proc
-    if proc is not None and proc.poll() is None:
-        try:
-            if os.name == 'nt':
-                proc.terminate()
-            else:
-                os.kill(proc.pid, signal.SIGINT)
-        except Exception:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+    if _signal_ffmpeg_stop():
         status['progress'] += ' (finalizando archivo...)'
     elif pid:
         try:
@@ -4540,6 +4567,39 @@ load_schedules()
 load_notifications()
 threading.Thread(target=scheduler_loop, daemon=True).start()
 
+
+def _handle_shutdown(signum, frame):
+    """
+    Docker envía SIGTERM al hacer `docker stop` / `compose down` / reiniciar.
+    Python, al ser el proceso principal (PID 1) del contenedor, ignora esa señal
+    si no tiene un manejador, y Docker acaba matando todo a la fuerza (SIGKILL),
+    dejando la grabación en curso corrupta. Aquí paramos ffmpeg con cuidado,
+    esperamos a que se guarde el archivo y el historial, y salimos.
+    """
+    global stop_requested, shutdown_requested
+    if shutdown_requested:
+        return
+    shutdown_requested = True
+    sys_log(f"Señal {signal.Signals(signum).name} recibida: apagando de forma segura...")
+
+    if status['running']:
+        stop_requested = True
+        _signal_ffmpeg_stop()
+        sys_log(f"Esperando a que la grabación se cierre (máx. {SHUTDOWN_GRACE_SEC}s)...")
+        deadline = time.monotonic() + SHUTDOWN_GRACE_SEC
+        while status['running'] and time.monotonic() < deadline:
+            time.sleep(0.5)
+        if status['running']:
+            sys_log("Aviso: la grabación no terminó de cerrarse a tiempo.")
+        else:
+            sys_log("Grabación cerrada y guardada correctamente.")
+
+    sys_log("Aplicación detenida.")
+    sys.exit(0)
+
+
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
     sys_log("Iniciando aplicación Flask...")
     app.run(host='0.0.0.0', port=5000, debug=False)
