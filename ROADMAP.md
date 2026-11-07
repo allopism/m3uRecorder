@@ -109,6 +109,21 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 
 ## App Android (companion)
 
-Pendiente de revisar. Si se activa `APP_TOKEN`, tendrá que enviar la cabecera
-`Authorization: Bearer <token>` en cada petición y usar el campo `sig` de
-`/api/media-info` para reproducir o descargar grabaciones.
+Repositorio aparte (`m3u-app`, Kotlin + Jetpack Compose + Media3).
+
+- [x] **A. Base:** git, `.gitignore`; sin IP fija en el código (la dirección se
+      pide en el primer arranque).
+- [x] **B. Token y fallos:** token en Ajustes (`Authorization: Bearer`, también en
+      el reproductor y solo hacia el servidor propio); enlaces firmados `sig` para
+      descargar y abrir en VLC; errores visibles (token incorrecto, sin conexión);
+      sondeo solo con la app visible; `allowBackup` desactivado.
+      Notificación "Grabando ahora" con cuenta atrás del sistema, botón Detener y
+      alarma exacta para programadas (sin servicio en primer plano). Los avisos de
+      completada/fallida van por Telegram.
+- [x] **C. Reorganizar:** `MainViewModel` con el estado y las acciones; una pantalla
+      por archivo (`ui/screens`), piezas comunes (`ui/components`), tema y utilidades
+      aparte; dependencias al día (Compose BOM 2026.08, Lifecycle 2.10) y pruebas
+      unitarias (`./gradlew test`).
+- [ ] **D. Rediseño a juego con la web:** iconos, claro/oscuro, logos, miniaturas,
+      panel único de grabar/programar; mostrar progreso sin el texto crudo de ffmpeg.
+- [ ] **E. Publicación:** firma propia, APK minimizado, versión y capturas.
