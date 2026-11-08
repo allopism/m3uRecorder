@@ -25,3 +25,7 @@ vpn/
 Thumbs.db
 .vscode/
 .idea/
+
+# Notas de trabajo personales (se conservan en local, fuera del repositorio)
+ROADMAP.md
+docs/ACTUALIZAR-desde-1.x.md
