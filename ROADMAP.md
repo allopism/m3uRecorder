@@ -132,10 +132,12 @@ Repositorio aparte (`m3u-app`, Kotlin + Jetpack Compose + Media3).
 - [x] **E. Publicación (parte 1):** firma propia (clave fuera del repositorio, datos en
       `keystore.properties`, ignorado por git), R8 activado (APK de 84 MB → 4,8 MB),
       versión 2.0.0 mostrada en Ajustes. APK final en `dist/m3uRecorder-2.0.0.apk`.
-- [ ] **Pendiente (siguiente sesión):**
-  - [ ] Cambio de hora de octubre: dejar elegir 1.ª o 2.ª vez al programar la hora
-        repetida (como la web), en lugar de usar siempre la primera.
-  - [ ] Probar en tablet y en horizontal (cuadrículas, panel inferior, reproductor).
-  - [ ] Actualizar Kotlin (2.2 → 2.3/2.4) y, con ello, Coil a su última versión.
-  - [ ] Al cerrar los dos proyectos: README de la app con capturas, repositorios en
-        GitHub y APK como "Release".
+- [x] **E. Publicación (parte 2):**
+  - [x] Cambio de hora: si la hora elegida se repite (octubre) se elige 1.ª o 2.ª vez,
+        como en la web; si no existe (marzo) se avisa. Duración real en el resumen y en
+        los chips; la hora se envía con su desfase exacto.
+  - [x] Tablets: giran libremente (en móvil sigue solo vertical); reproductor con ancho
+        máximo; al salir de pantalla completa ya no se pierde el modo de borde a borde.
+  - [x] Kotlin 2.4.20 y Coil 3.6.2. Calendario y reloj del sistema con el color de la app.
+        Sin aviso de "lista vacía" antes de la primera carga. 13 pruebas unitarias.
+- [ ] **Cierre:** README de la app con capturas, repositorios en GitHub y APK como "Release".
