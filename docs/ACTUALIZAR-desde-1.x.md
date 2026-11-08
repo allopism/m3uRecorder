@@ -15,7 +15,7 @@ contenedor) a la versión actual. Hazlos en la carpeta del proyecto en el servid
 
 ## 2. `.env`
 
-Parte de [.env.example](.env.example). Variables nuevas:
+Parte de [.env.example](../.env.example). Variables nuevas:
 
 | Variable | Para qué |
 |---|---|
@@ -27,7 +27,7 @@ Parte de [.env.example](.env.example). Variables nuevas:
 
 ## 3. `docker-compose.yml`
 
-Lo más sencillo es partir del [docker-compose.yml](docker-compose.yml) del repo y
+Lo más sencillo es partir del [docker-compose.yml](../docker-compose.yml) del repo y
 ajustar las rutas en `.env`. Si prefieres editar el tuyo:
 
 - En `gluetun`, cambia `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE` por la versión con

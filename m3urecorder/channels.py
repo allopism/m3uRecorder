@@ -1,4 +1,4 @@
-"""Lista de canales en formato M3U (por ejemplo, las de iptv-org)."""
+"""Lista de canales en formato M3U."""
 import os
 import re
 

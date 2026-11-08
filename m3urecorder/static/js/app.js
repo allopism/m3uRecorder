@@ -343,7 +343,7 @@ function renderChannels() {
     grid.innerHTML = filtered
       ? `<div class="empty">${icon('search')}<strong>Sin resultados</strong><span>Prueba con otro nombre o categoría.</span></div>`
       : `<div class="empty">${icon('tv')}<strong>No hay lista de canales</strong>
-           <span>Coloca un archivo M3U en <code>${esc(M3U_FILE)}</code> (por ejemplo, una lista de iptv-org) y pulsa «Recargar lista», o graba pegando una URL.</span>
+           <span>Coloca un archivo M3U en <code>${esc(M3U_FILE)}</code> y pulsa «Recargar lista», o graba pegando una URL.</span>
            <button type="button" class="btn btn-primary" data-action="manual">${icon('link')}<span>Pegar URL</span></button></div>`;
     return;
   }

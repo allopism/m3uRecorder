@@ -1,8 +1,7 @@
 # Hoja de ruta — m3uRecorder
 
-DVR autoalojado para grabar streams públicos en directo (pensado para listas
-abiertas como [iptv-org](https://github.com/iptv-org/iptv)), con VPN opcional
-vía Gluetun para los canales geobloqueados.
+DVR autoalojado para grabar emisiones públicas en directo a partir de listas M3U,
+con VPN opcional vía Gluetun para los canales con restricción geográfica.
 
 **Cómo trabajamos:** cada punto es un commit pequeño. Después de cada uno se
 prueba en Docker; si algo se rompe, se vuelve atrás con `git revert` o con la
@@ -92,9 +91,11 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 
 ## Fase 4 — Presentación
 
-- [ ] README con capturas/GIF, diagrama de arquitectura y guía de despliegue.
-- [ ] Licencia (MIT) y aviso de uso: solo streams públicos o con derechos.
-- [ ] Imagen publicada en GitHub Container Registry.
+- [x] README en inglés y español con capturas (claro, oscuro, móvil y app), diagrama
+      de arquitectura, guía de despliegue y notas de seguridad.
+- [x] Licencia MIT y aviso de uso responsable.
+- [x] Imagen en GitHub Container Registry (amd64 + arm64) al etiquetar una versión
+      (`.github/workflows/release.yml`); el `docker-compose.yml` la usa por defecto.
 
 ## Fase 5 — Funcionalidad (opcional, cuando todo lo anterior esté)
 
@@ -102,7 +103,7 @@ Ordenados por impacto. Ninguno cambia cómo se usa la app.
 - [ ] Recuperar al arrancar los `.rec.ts` que deje un corte brusco (convertirlos y
       añadirlos al historial). Hoy se conservan y se pueden reproducir, pero a mano.
 - [ ] Progreso real de la grabación (`ffmpeg -progress`).
-- [ ] Importar listas M3U por URL (p. ej. directamente de iptv-org) y guía EPG (XMLTV).
+- [ ] Importar listas M3U por URL y guía de programación EPG (XMLTV).
 - [ ] Varias grabaciones a la vez (si comparten país de VPN).
 - [ ] SSE en lugar de consultar el estado cada 2 s.
 - [ ] SQLite en lugar de JSON.
@@ -140,4 +141,5 @@ Repositorio aparte (`m3u-app`, Kotlin + Jetpack Compose + Media3).
         máximo; al salir de pantalla completa ya no se pierde el modo de borde a borde.
   - [x] Kotlin 2.4.20 y Coil 3.6.2. Calendario y reloj del sistema con el color de la app.
         Sin aviso de "lista vacía" antes de la primera carga. 13 pruebas unitarias.
-- [ ] **Cierre:** README de la app con capturas, repositorios en GitHub y APK como "Release".
+- [x] **Cierre:** README en inglés y español con capturas, licencia MIT y CI (pruebas +
+      APK de depuración como artefacto). Repositorio en GitHub y APK como "Release".

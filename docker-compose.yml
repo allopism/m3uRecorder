@@ -7,7 +7,7 @@
 #
 # Uso:
 #   cp .env.example .env   # y rellena tus datos
-#   docker compose up -d --build
+#   docker compose up -d
 
 services:
   gluetun:
@@ -33,7 +33,9 @@ services:
     restart: unless-stopped
 
   m3u-recorder:
-    build: .
+    # Imagen ya construida (amd64 y arm64). Para construirla tú a partir del código,
+    # cambia esta línea por:  build: .
+    image: ghcr.io/allopism/m3urecorder:latest
     container_name: m3u-recorder
     # Usuario con el que se escriben las grabaciones (dueño de RECORDINGS_DIR en el host)
     user: "${PUID:-1000}:${PGID:-1000}"
